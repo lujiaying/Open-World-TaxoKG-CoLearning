@@ -4,7 +4,9 @@ Author: Jiaying Lu
 Create Date: Apr 11, 2021
 """
 
+import re
 import json
+import tqdm
 
 
 def extract_areas(inpath: str, outpath: str):
@@ -118,6 +120,26 @@ def extract_methods(inpath: str, outpath: str):
             fwrite.write('%s\tUsedFor\t%s\n' % (method, area))
 
 
+def extract_instances_of_pairs(input_path: str, head: str, tail: str, out_path: str):
+    with open(input_path, 'r') as fopen:
+        result = json.load(fopen)
+    prog = re.compile(r'%s [\w ]+ %s' % (head, tail), re.I)
+    prog_r = re.compile(r'%s [\w ]+ %s' % (tail, head), re.I)
+    with open(out_path, 'w') as fwrite:
+        for paper_dict in tqdm.tqdm(result):
+            abstract = paper_dict['abstract']
+            if not abstract or len(abstract) <= 0:
+                continue
+            res = prog.findall(abstract)
+            if res:
+                for pat in res:
+                    fwrite.write(pat + '\n')
+            res = prog_r.findall(abstract)
+            if res:
+                for pat in res:
+                    fwrite.write(pat + '\n')
+
+
 if __name__ == '__main__':
     data_dir = 'data/seed_taxonomy/paperswithcode'
     evaluation_table_path = '%s/evaluation-tables.json' % (data_dir)
@@ -136,4 +158,10 @@ if __name__ == '__main__':
 
     method_in_path = '%s/methods.json' % (data_dir)
     method_out_path = '%s/methods.txt' % (data_dir)
-    extract_methods(method_in_path, method_out_path)
+    # extract_methods(method_in_path, method_out_path)
+
+    abstract_path = '%s/papers-with-abstracts.json' % (data_dir)
+    head = 'GNN'
+    tail = 'node classification'
+    out_path = '%s/%s-%s.pattern' % (data_dir, head, tail)
+    extract_instances_of_pairs(abstract_path, head, tail, out_path)
