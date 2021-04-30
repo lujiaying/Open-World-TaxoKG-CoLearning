@@ -105,6 +105,7 @@ def extract_relation_info_from_wikidata(relations_path: str, wikidata_path: str,
         relations = json.load(fopen)
     pids = set(relations.keys())
     hit_cnt = 0
+    keyerror_cnt = 0
     line_starts = '{"type":"%s"' % (entry_type)
     pat = re.compile(r'\{"type":"%s","id":"(\w+)",' % (entry_type))
     with bz2.open(wikidata_path, 'rt') as fopen, open(out_path, 'w') as fwrite:
@@ -117,12 +118,37 @@ def extract_relation_info_from_wikidata(relations_path: str, wikidata_path: str,
             if not re_res:
                 continue
             ent_id = re_res.group(1)
-            # info = json.loads(line)
             # ent_id = info['id']
             if ent_id not in pids:
                 continue
+            info = json.loads(line)
+            # filter out irrelavant info
+            res = {}
+            res['id'] = info['id']
+            # res['label'] = info['labels']['en']['value']
+            res['claims'] = {}
+            if 'P31' in info['claims']:   # P31: instance_of
+                # res['claims']['P31'] = [_['mainsnak']['datavalue']['value']['id'] for _ in info['claims']['P31']]
+                res['claims']['P31'] = []
+                for _ in info['claims']['P31']:
+                    try:
+                        tail_ent_id = _['mainsnak']['datavalue']['value']['id']
+                        res['claims']['P31'].append(tail_ent_id)
+                    except KeyError:
+                        keyerror_cnt += 1
+                        print('KeyError: %s P31 item is: %s' % (ent_id, _))
+            if 'P279' in info['claims']:  # P279 subclass_of
+                # res['claims']['P279'] = [_['mainsnak']['datavalue']['value']['id'] for _ in info['claims']['P279']]
+                res['claims']['P279'] = []
+                for _ in info['claims']['P279']:
+                    try:
+                        tail_ent_id = _['mainsnak']['datavalue']['value']['id']
+                        res['claims']['P279'].append(tail_ent_id)
+                    except KeyError:
+                        keyerror_cnt += 1
+                        print('KeyError: %s P279 item is: %s' % (ent_id, _))
             hit_cnt += 1
-            fwrite.write(line + '\n')
+            fwrite.write(json.dumps(res) + '\n')
             if hit_cnt % int(len(pids)/10) == 0:
                 print('hit cnt=%d outof %d' % (hit_cnt, len(pids)))
             if hit_cnt >= len(pids):
@@ -157,5 +183,5 @@ if __name__ == '__main__':
     # extract_relation_info_from_wikidata(relations_path, wikidata_path, out_path)
     entities_path = 'data/FewRel/entities/wiki_all.json'
     out_path = 'data/FewRel/Wikidata/entities-all-info.jsonlines'
-    # extract_relation_info_from_wikidata(entities_path, wikidata_path, out_path,
-    #                                     entry_type='item')
+    extract_relation_info_from_wikidata(entities_path, wikidata_path, out_path,
+                                        entry_type='item')
