@@ -66,7 +66,6 @@ def analysis_WN18RR(data_dir: str):
           len(train_test_inter)/len(test_node_set)))
 
 
-
 if __name__ == '__main__':
     CN100k_dir = 'data/CN-100K'
     # analysis_CN100k(CN100k_dir)
