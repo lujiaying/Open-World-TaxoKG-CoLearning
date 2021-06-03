@@ -156,6 +156,7 @@ class TaxoCBR:
         all_hit1, all_hit3, all_hit10 = 0, 0, 0
         all_mrr = 0.0
         taxo_cbr_found_cnt = 0
+        avg_rule_cnt = []
         for (h, r, t) in tqdm.tqdm(test_set):
             cor_hs, cor_ts = generate_corrupted_triples((h, r, t),
                                                         self.ent_vocab,
@@ -167,13 +168,14 @@ class TaxoCBR:
             # print('similar ents for h:', similar_ents)
             # Reuse step
             rules = self._find_paths(similar_ents, r, is_head=True)
+            if len(rules) > 0:
+                taxo_cbr_found_cnt += 1
+                avg_rule_cnt.append(len(rules))
             if max_rule > 0 and len(rules) > 0:
                 rules = sorted(rules.items(), key=lambda _: _[1], reverse=True)[:max_rule]
                 rules = dict(rules)
             # Revise step
             pred_tails = self._predict_by_paths(h, rules, is_head=True)
-            if len(pred_tails) > 0:
-                taxo_cbr_found_cnt += 1
             cor_ts = filter(lambda _: _[2] in pred_tails, cor_ts)
             cor_ts = sorted(cor_ts, key=lambda _: pred_tails[_[2]], reverse=True)
             # print('ranked cor_ts: ', cor_ts[:15])
@@ -188,6 +190,7 @@ class TaxoCBR:
         all_hit3 /= taxo_cbr_found_cnt
         all_hit10 /= taxo_cbr_found_cnt
         all_mrr /= taxo_cbr_found_cnt
+        print('avg rule cnt=%.1f' % (sum(avg_rule_cnt)/len(avg_rule_cnt)))
         print('hyperparams max_rule=%d' % (max_rule))
         print('taxo_cbr found %d/%d' % (taxo_cbr_found_cnt, len(test_set)))
         print('MRR=%.3f' % (all_mrr))
@@ -236,8 +239,8 @@ def load_all_path(fname: str) -> dict:
 
 
 if __name__ == '__main__':
-    dataset = 'CN100K'    # to set
-    max_rule = 15         # to set
+    dataset = 'WN18RR'    # to set
+    max_rule = 0         # to set
 
     if dataset == 'WN18RR':
         WN18RR_dir = 'data/WN18RR'
