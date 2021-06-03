@@ -149,7 +149,10 @@ class TaxoCBR:
         # print(preds)
         return preds
 
-    def do_eval(self, test_set: list):
+    def do_eval(self, test_set: list, max_rule: int = 0):
+        """
+        max_rule: 0 indicates unlimited.
+        """
         all_hit1, all_hit3, all_hit10 = 0, 0, 0
         all_mrr = 0.0
         taxo_cbr_found_cnt = 0
@@ -164,6 +167,9 @@ class TaxoCBR:
             # print('similar ents for h:', similar_ents)
             # Reuse step
             rules = self._find_paths(similar_ents, r, is_head=True)
+            if max_rule > 0 and len(rules) > 0:
+                rules = sorted(rules.items(), key=lambda _: _[1], reverse=True)[:max_rule]
+                rules = dict(rules)
             # Revise step
             pred_tails = self._predict_by_paths(h, rules, is_head=True)
             if len(pred_tails) > 0:
@@ -178,6 +184,11 @@ class TaxoCBR:
             all_hit3 += hit3
             all_hit10 += hit10
             all_mrr += mrr
+        all_hit1 /= taxo_cbr_found_cnt   # TODO: to modify after all rels
+        all_hit3 /= taxo_cbr_found_cnt
+        all_hit10 /= taxo_cbr_found_cnt
+        all_mrr /= taxo_cbr_found_cnt
+        print('hyperparams max_rule=%d' % (max_rule))
         print('taxo_cbr found %d/%d' % (taxo_cbr_found_cnt, len(test_set)))
         print('MRR=%.3f' % (all_mrr))
         print('hits@1,3,10 =%.3f, %.3f, %.3f' % (all_hit1, all_hit3, all_hit10))
@@ -226,6 +237,7 @@ def load_all_path(fname: str) -> dict:
 
 if __name__ == '__main__':
     dataset = 'CN100K'    # to set
+    max_rule = 15         # to set
 
     if dataset == 'WN18RR':
         WN18RR_dir = 'data/WN18RR'
@@ -241,7 +253,7 @@ if __name__ == '__main__':
     # produce_3hop_path(train_set, max3hop_path_fname)
     all_paths = load_all_path(max3hop_path_fname)
     model = TaxoCBR(train_set, dev_set, test_set, taxo_rels, all_paths)
-    model.do_eval(test_set)
+    model.do_eval(test_set, max_rule=max_rule)
 
     """
     ent = '03001627'   # chair
