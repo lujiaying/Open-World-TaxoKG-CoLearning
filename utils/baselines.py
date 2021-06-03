@@ -24,12 +24,15 @@ def generate_corrupted_triples(test_triple: set, vocab: dict, shown_triples: set
 
 def evaluate_mrr_hits(gold_triple: tuple, ranked_list: list) -> tuple:
     # hit @1, 3, 10
-    hit1 = 1 if gold_triple in ranked_list[:1] else 0
-    hit3 = 1 if gold_triple in ranked_list[:3] else 0
-    hit10 = 1 if gold_triple in ranked_list[:10] else 0
+    hit1 = 1.0 if gold_triple in ranked_list[:1] else 0.0
+    hit3 = 1.0 if gold_triple in ranked_list[:3] else 0.0
+    hit10 = 1.0 if gold_triple in ranked_list[:10] else 0.0
     # mrr
-    rank = ranked_list.index(gold_triple) + 1
-    mrr = 1.0 / rank
+    if gold_triple not in ranked_list:
+        mrr = 0.0
+    else:
+        rank = ranked_list.index(gold_triple) + 1
+        mrr = 1.0 / rank
     return hit1, hit3, hit10, mrr
 
 
