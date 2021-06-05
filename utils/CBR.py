@@ -47,6 +47,7 @@ class TaxoCBR:
             self.h_rels[h].add((r, t))
             self.t_rels[t].add((r, h))
         self.ent_embs = self._cal_rel_based_embedding(self.ent2id, self.rel2id, train_set)
+        self.id2ent = {v: k for (k, v) in self.ent2id.items()}
         # to generate corrupted triples, need access to dev, test sets
         for (h, r, t) in (dev_set + test_set):
             self.all_triples.add((h, r, t))
@@ -80,7 +81,7 @@ class TaxoCBR:
             ent_embs[ent2id[t], m+rel2id[r]] = 1
         ent_embs = np.sqrt(ent_embs)
         l2norm = np.linalg.norm(ent_embs, axis=1)   # shape: len(ent2id)
-        l2norm[0] += np.finfo(np.float).eps
+        l2norm[0] += np.finfo(float).eps
         ent_embs = ent_embs / l2norm.reshape(l2norm.shape[0], 1)
         print('entity embedding shape (%d,%d) calc done' % (len(ent2id), 2*m))
         return ent_embs
@@ -90,8 +91,33 @@ class TaxoCBR:
         ent2id = self.ent2id.get(ent2, 0)
         return np.dot(self.ent_embs[ent1id], self.ent_embs[ent2id])
 
-    def _retrieve_similar_ents(self, ent: str, rel: str) -> dict:
+    def _retrieve_similar_ents(self, ent: str, rel: str, is_head: bool, max_cnt: int = 15) -> dict:
         results = Counter()
+        if ent not in self.ent2id:
+            return results
+        ent_emb = self.ent_embs[self.ent2id[ent]]
+        emb_shape = self.ent_embs.shape[1]
+        ent_emb = ent_emb.reshape(1, emb_shape)
+        sim_mat = np.matmul(ent_emb, self.ent_embs.T).squeeze()   # shape: len(ent2id)
+        sim_ids = sim_mat.argpartition(-max_cnt*2)[-max_cnt*2:]
+        for sim_id in sim_ids:
+            sim_ent = self.id2ent[sim_id]
+            if ent == sim_ent:
+                continue
+            sim_score = sim_mat[sim_id]
+            # ensure sim_ent also has rel edge
+            sim_ent_emb = self.ent_embs[sim_id]
+            if is_head:
+                if sim_ent_emb[self.rel2id[rel]] <= 0.0:
+                    continue
+            else:
+                if sim_ent_emb[len(self.rel2id) + self.rel2id[rel]] <= 0.0:
+                    continue
+            results[sim_ent] = sim_score
+            if len(results) >= max_cnt:
+                break
+        """
+        # TODO: to combine taxo and KNN
         if rel not in self.taxo_rels:
             # rel is non-taxo rel, using hypernym, sibling, hyponym
             for hypernym, siblings in self._get_hypernyms_siblings(ent):
@@ -102,6 +128,7 @@ class TaxoCBR:
         else:
             # rel is taxo rel, using K-NN search
             pass
+        """
         return results
 
     def _find_paths(self, ents: dict, rel: str, is_head: bool) -> dict:
@@ -149,13 +176,14 @@ class TaxoCBR:
         # print(preds)
         return preds
 
-    def do_eval(self, test_set: list, max_rule: int = 0):
+    def do_eval(self, test_set: list, max_sim_ent: int = 15, max_rule: int = 0, debug: bool = False):
         """
         max_rule: 0 indicates unlimited.
         """
         all_hit1, all_hit3, all_hit10 = 0, 0, 0
         all_mrr = 0.0
-        taxo_cbr_found_cnt = 0
+        rule_found_cnt = 0
+        pred_found_cnt = 0
         avg_rule_cnt = []
         for (h, r, t) in tqdm.tqdm(test_set):
             cor_hs, cor_ts = generate_corrupted_triples((h, r, t),
@@ -163,22 +191,28 @@ class TaxoCBR:
                                                         self.all_triples)
             # -- tail prediction --
             # Retrieve step
-            # print('triple to predict: ', h, r, t)
-            similar_ents = self._retrieve_similar_ents(h, r)
-            # print('similar ents for h:', similar_ents)
+            similar_ents = self._retrieve_similar_ents(h, r, is_head=True, max_cnt=max_sim_ent)
+            if debug:
+                print('triple to predict: ', h, r, t)
+                print('similar ents for h: ', sorted(similar_ents.items(), key=lambda _: _[1], reverse=True)[:15])
             # Reuse step
             rules = self._find_paths(similar_ents, r, is_head=True)
             if len(rules) > 0:
-                taxo_cbr_found_cnt += 1
+                rule_found_cnt += 1
                 avg_rule_cnt.append(len(rules))
             if max_rule > 0 and len(rules) > 0:
                 rules = sorted(rules.items(), key=lambda _: _[1], reverse=True)[:max_rule]
+                if debug:
+                    print('rules for tail pred:', rules[:5])
                 rules = dict(rules)
             # Revise step
             pred_tails = self._predict_by_paths(h, rules, is_head=True)
+            if len(pred_tails) > 0:
+                pred_found_cnt += 1
             cor_ts = filter(lambda _: _[2] in pred_tails, cor_ts)
             cor_ts = sorted(cor_ts, key=lambda _: pred_tails[_[2]], reverse=True)
-            # print('ranked cor_ts: ', cor_ts[:15])
+            if debug:
+                print('ranked cor_ts: ', cor_ts[:15])
             hit1, hit3, hit10, mrr = evaluate_mrr_hits((h, r, t), cor_ts)
             # print('MRR=%.3f' % (mrr))
             # print('hits@1,3,10 =%.3f, %.3f, %.3f' % (hit1, hit3, hit10))
@@ -186,13 +220,16 @@ class TaxoCBR:
             all_hit3 += hit3
             all_hit10 += hit10
             all_mrr += mrr
-        all_hit1 /= taxo_cbr_found_cnt   # TODO: to modify after all rels
-        all_hit3 /= taxo_cbr_found_cnt
-        all_hit10 /= taxo_cbr_found_cnt
-        all_mrr /= taxo_cbr_found_cnt
+            if debug and rule_found_cnt >= 2:
+                exit(0)
+        all_hit1 /= pred_found_cnt   # TODO: to modify after all rels
+        all_hit3 /= pred_found_cnt
+        all_hit10 /= pred_found_cnt
+        all_mrr /= pred_found_cnt
         print('avg rule cnt=%.1f' % (sum(avg_rule_cnt)/len(avg_rule_cnt)))
-        print('hyperparams max_rule=%d' % (max_rule))
-        print('taxo_cbr found %d/%d' % (taxo_cbr_found_cnt, len(test_set)))
+        print('rule found %d/%d, pred found %d/%d' % (rule_found_cnt, len(test_set),
+                                                      pred_found_cnt, len(test_set)))
+        print('hyperparams max_sim_ent=%d, max_rule=%d' % (max_sim_ent, max_rule))
         print('MRR=%.3f' % (all_mrr))
         print('hits@1,3,10 =%.3f, %.3f, %.3f' % (all_hit1, all_hit3, all_hit10))
 
@@ -239,15 +276,17 @@ def load_all_path(fname: str) -> dict:
 
 
 if __name__ == '__main__':
-    dataset = 'WN18RR'    # to set
-    max_rule = 0         # to set
+    dataset = 'WN18RR'    # [CN100k, WN18RR]
+    max_sim_ent = 5       # to set
+    max_rule = 25          # to set
+    debug = False
 
     if dataset == 'WN18RR':
         WN18RR_dir = 'data/WN18RR'
         taxo_rels = ['_hypernym', '_instance_hypernym']
         train_set, dev_set, test_set = load_dataset(WN18RR_dir, 'WN18RR')
         max3hop_path_fname = 'data/WN18RR/train_3hop_paths.txt'
-    elif dataset == 'CN100K':
+    elif dataset == 'CN100k':
         CN100k_dir = 'data/CN-100K'
         taxo_rels = ['IsA']
         train_set, dev_set, test_set = load_dataset(CN100k_dir, 'CN100k')
@@ -256,19 +295,4 @@ if __name__ == '__main__':
     # produce_3hop_path(train_set, max3hop_path_fname)
     all_paths = load_all_path(max3hop_path_fname)
     model = TaxoCBR(train_set, dev_set, test_set, taxo_rels, all_paths)
-    model.do_eval(test_set, max_rule=max_rule)
-
-    """
-    ent = '03001627'   # chair
-    # ent = '01503061'   # bird
-    hypernym_sibling = model._get_hypernym_sibling(ent)
-    print('taxo related ents for %s: ' % (ent))
-    for hypernym, siblings in hypernym_sibling:
-        print('hypernym: %s -- %.4f' % (hypernym, model._cal_emb_similarity(ent, hypernym)))
-        for sib in siblings:
-            print('sibling: %s -- %.4f' % (sib, model._cal_emb_similarity(ent, sib)))
-    hyponyms = model._get_hyponym(ent)
-    print('hyponym:  ')
-    for hyponym in hyponyms:
-        print('%s -- %.4f' % (hyponym, model._cal_emb_similarity(ent, hyponym)))
-    """
+    model.do_eval(test_set, max_rule=max_rule, debug=debug)
