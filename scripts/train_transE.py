@@ -5,6 +5,7 @@ Create Date: Jun 7, 2021
 """
 
 import time
+import os
 import random
 from typing import Tuple
 
@@ -12,6 +13,7 @@ import numpy as np
 import torch as th
 from torch.utils.data import DataLoader
 import sacred
+from sacred.observers import FileStorageObserver
 
 from model.data_loader import prepare_ingredients, sample_negative_triples
 from model.TransE import TransE, cal_metrics
@@ -19,6 +21,7 @@ from model.TransE import TransE, cal_metrics
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('base-TransE')
+ex.observers.append(FileStorageObserver("logs/base-TransE"))
 
 
 @ex.config
@@ -27,7 +30,8 @@ def my_config():
     opt = {
            'gpu': False,
            'seed': 27,
-           'corpus_type': '',   # WN18RR | CN100k
+           'corpus_type': '',     # WN18RR | CN100k
+           'checkpoint_dir': '',  # to set
            'dataset_dir': {
                'WN18RR': 'data/WN18RR',
                'CN100k': 'data/CN-100K'
@@ -43,7 +47,7 @@ def my_config():
             }
 
 
-def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device, known_triples: set) -> Tuple[float, float, float, float]:
+def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device, known_triples_map: dict) -> Tuple[float, float, float, float]:
     hits_1 = 0.0
     hits_3 = 0.0
     hits_10 = 0.0
@@ -69,12 +73,14 @@ def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: t
         batch_h = batch_h[:, 0].unsqueeze(1)   # B*1
         batch_r = batch_r[:, 0].unsqueeze(1)   # B*1
         batch_t = batch_t[:, 0].unsqueeze(1)   # B*1
-        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(tail_preds, batch_h, batch_r, batch_t, is_tail_preds=True, known_triples=known_triples)
+        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(tail_preds, batch_h, batch_r, batch_t,
+                                                           is_tail_preds=True, known_triples_map=known_triples_map)
         hits_1 += b_hits_1
         hits_3 += b_hits_3
         hits_10 += b_hits_10
         mrr += b_mrr
-        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(head_preds, batch_h, batch_r, batch_t, is_tail_preds=False, known_triples=known_triples)
+        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(head_preds, batch_h, batch_r, batch_t,
+                                                           is_tail_preds=False, known_triples_map=known_triples_map)
         hits_1 += b_hits_1
         hits_3 += b_hits_3
         hits_10 += b_hits_10
@@ -94,12 +100,17 @@ def main(opt, _run, _log):
     if opt['corpus_type'] not in ['WN18RR', 'CN100k']:
         _log.error('corpus_type=%s invalid' % (opt['corpus_type']))
         exit(-1)
+    if opt['checkpoint_dir'] == '':
+        _log.error('checkpoint_dir=%s invalid' % (opt['checkpoint_dir']))
+        exit(-1)
+    if not os.path.exists(opt['checkpoint_dir']):
+        os.makedirs(opt['checkpoint_dir'])
     # Setup essential vars
     dataset_dir = opt['dataset_dir'][opt['corpus_type']]
 
     # Load corpus
     train_set, dev_set, test_set, \
-        ent_vocab, rel_vocab, train_triples, all_triples = prepare_ingredients(dataset_dir, opt['corpus_type'])
+        ent_vocab, rel_vocab, train_triples, all_triples_map = prepare_ingredients(dataset_dir, opt['corpus_type'])
     train_iter = DataLoader(train_set, batch_size=opt['batch_size'], shuffle=True)
     dev_iter = DataLoader(dev_set, batch_size=opt['batch_size']//4, shuffle=False)
     test_iter = DataLoader(test_set, batch_size=opt['batch_size']//4, shuffle=False)
@@ -139,7 +150,7 @@ def main(opt, _run, _log):
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
             model.eval()
-            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples)
+            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples_map)
             _log.info('[%s] epoch#%d evaluate, hits@1,3,10=%.3f,%.3f,%.3f, mrr=%.3f' % (time.ctime(), i_epoch, hits_1, hits_3, hits_10, mrr))
             if mrr >= best_mrr:
                 best_mrr = mrr
@@ -151,5 +162,5 @@ def main(opt, _run, _log):
     model.load_state_dict(checkpoint)
     model = model.to(device)
     model.eval()
-    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples)
+    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples_map)
     _log.info('[%s] TEST on best model, hits@1,3,10=%.3f,%.3f,%.3f, mrr=%.3f' % (time.ctime(), hits_1, hits_3, hits_10, mrr))

@@ -4,6 +4,7 @@ Author: Jiaying Lu
 Create Date: Jun 7, 2021
 """
 import random
+from collections import defaultdict
 
 import torch as th
 from torch.utils import data
@@ -65,7 +66,7 @@ def sample_negative_triples(batch_h: th.LongTensor, batch_r: th.LongTensor, batc
 
 
 def prepare_ingredients(dataset_dir: str, corpus_type: str)\
-        -> Tuple[data.Dataset, data.Dataset, data.Dataset, dict, dict, set, set]:
+        -> Tuple[data.Dataset, data.Dataset, data.Dataset, dict, dict, set, dict]:
     train_triples, dev_triples, test_triples = load_dataset(dataset_dir, corpus_type)
     ent_vocab, rel_vocab = get_vocabs(train_triples)
     train_set = LinkPredDst(train_triples, ent_vocab, rel_vocab)
@@ -73,12 +74,14 @@ def prepare_ingredients(dataset_dir: str, corpus_type: str)\
     test_set = LinkPredDst(test_triples, ent_vocab, rel_vocab)
     # triples consit of ids for negative sampling and evaluation
     train_triple_ids = set([(ent_vocab[h], rel_vocab[r], ent_vocab[t]) for (h, r, t) in train_triples])
-    all_triple_ids = set()  # resources for corrupted triples evaluation
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for corrupted triples evaluation
     for (h, r, t) in (train_triples + dev_triples + test_triples):
         if h not in ent_vocab or t not in ent_vocab:
             continue
-        all_triple_ids.add((ent_vocab[h], rel_vocab[r], ent_vocab[t]))
-    return train_set, dev_set, test_set, ent_vocab, rel_vocab, train_triple_ids, all_triple_ids
+        all_triple_ids_map['h'][(ent_vocab[h], rel_vocab[r])].add(ent_vocab[t])
+        all_triple_ids_map['t'][(ent_vocab[t], rel_vocab[r])].add(ent_vocab[h])
+    return train_set, dev_set, test_set, ent_vocab, rel_vocab, train_triple_ids, all_triple_ids_map
 
 
 if __name__ == '__main__':

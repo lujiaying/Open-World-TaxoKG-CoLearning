@@ -44,37 +44,37 @@ class TransE(nn.Module):
         return score
 
 
-def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_t: th.Tensor, is_tail_preds: bool, known_triples: set) -> Tuple[float, float, float, float]:
+def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_t: th.Tensor, is_tail_preds: bool, known_triples_map: dict) -> Tuple[int, int, int, float]:
     """
     Args:
         preds: shape=(B,ent_c)
         batch_h,r,t: shape=(B,1)
+        known_triples_map: {'h': {(h,r):{t1,t2,t3...}}, 't': {}}
     """
-    hits_1 = 0
-    hits_3 = 0
-    hits_10 = 0
-    mrr = 0.0
-    indices = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
+    preds_to_ignore = preds.new_zeros(preds.size())  # non-zero entries for existing triples
     for i in range(preds.size(0)):
         h, r, t = batch_h[i].item(), batch_r[i].item(), batch_t[i].item()
-        ranked_list = []    # for one triple
-        for index in indices[i]:
-            if is_tail_preds is True:
-                triple = (h, r, index)
-            else:
-                triple = (index, r, t)
-            if triple in known_triples:
-                continue
-            ranked_list.append(index)
         if is_tail_preds is True:
-            gold_ent = t
+            ents_to_ignore = list(known_triples_map['h'][(h, r)])
+            if t in ents_to_ignore:
+                ents_to_ignore.remove(t)
         else:
-            gold_ent = h
-        hits_1 += 1.0 if gold_ent in ranked_list[:1] else 0.0
-        hits_3 += 1.0 if gold_ent in ranked_list[:3] else 0.0
-        hits_10 += 1.0 if gold_ent in ranked_list[:10] else 0.0
-        rank = ranked_list.index(gold_ent) + 1
-        mrr += (1.0 / rank)
+            ents_to_ignore = list(known_triples_map['t'][(t, r)])
+            if h in ents_to_ignore:
+                ents_to_ignore.remove(h)
+        preds_to_ignore[i][ents_to_ignore] = th.finfo().max
+    preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
+    indices = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
+    if is_tail_preds is True:
+        ground_truth = batch_t
+    else:
+        ground_truth = batch_h
+    zero_tensor = ground_truth.new_tensor([0])
+    one_tensor = ground_truth.new_tensor([1])
+    hits_1 = th.where(indices[:, :1] == ground_truth, one_tensor, zero_tensor).sum().item()
+    hits_3 = th.where(indices[:, :3] == ground_truth, one_tensor, zero_tensor).sum().item()
+    hits_10 = th.where(indices[:, :10] == ground_truth, one_tensor, zero_tensor).sum().item()
+    mrr = (1.0 / (indices == ground_truth).nonzero(as_tuple=False)[:, 1].float().add(1.0)).sum().item()
     return hits_1, hits_3, hits_10, mrr
 
 
