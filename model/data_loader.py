@@ -57,10 +57,10 @@ def sample_negative_triples(batch_h: th.LongTensor, batch_r: th.LongTensor, batc
         while (h, r, t) in known_triples:
             if head_or_tail[idx].item() == 1:
                 # resample head
-                h = random.randint(0, len(ent_vocab))
+                h = random.randint(0, len(ent_vocab)-1)
             else:
                 # resample tail
-                t = random.randint(0, len(ent_vocab))
+                t = random.randint(0, len(ent_vocab)-1)
         negative_triples[idx] = negative_triples.new_tensor((h, r, t))
     return negative_triples
 

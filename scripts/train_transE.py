@@ -41,9 +41,14 @@ def my_config():
            'emb_dim': 100,
            'epoch': 1000,
            'validate_freq': 10,
+           'optim_type': 'Adam',   # Adam | SGD
            'optim_lr': 3e-4,
+           'optim_momentum': 0.0,    # for SGD
            'optim_wdecay': 0.5e-4,
            'loss_margin': 1.0,
+           'use_scheduler': True,
+           'scheduler_step': 100,
+           'scheduler_gamma': 0.5,
             }
 
 
@@ -116,7 +121,7 @@ def main(opt, _run, _log):
     test_iter = DataLoader(test_set, batch_size=opt['batch_size']//4, shuffle=False)
     _log.info('[%s] Load dataset Done, len=%d,%d,%d' % (time.ctime(),
               len(train_set), len(dev_set), len(test_set)))
-    _log.info('Entity cnt=%d, rel cnt=%d' % (len(ent_vocab), len(rel_vocab)))
+    _log.info('corpus=%s, Entity cnt=%d, rel cnt=%d' % (opt['corpus_type'], len(ent_vocab), len(rel_vocab)))
 
     # Build model
     device = th.device('cuda') if opt['gpu'] else th.device('cpu')
@@ -124,8 +129,16 @@ def main(opt, _run, _log):
     model = model.to(device)
     criterion = th.nn.MarginRankingLoss(margin=opt['loss_margin'])
     criterion = criterion.to(device)
-    optimizer = th.optim.Adam(model.parameters(), opt['optim_lr'], weight_decay=opt['optim_wdecay'])
-    _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
+    if opt['optim_type'] == 'Adam':
+        optimizer = th.optim.Adam(model.parameters(), opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    elif opt['optim_type'] == 'SGD':
+        optimizer = th.optim.SGD(model.parameters(), opt['optim_lr'], momentum=opt['optim_momentum'], weight_decay=opt['optim_wdecay'])
+    else:
+        _log.error('opt["optim_type"] =%s not in [Adam, SGD]' % (opt['optim_type']))
+        exit(-1)
+    if opt['use_scheduler']:
+        scheduler = th.optim.lr_scheduler.StepLR(optimizer, step_size=opt['scheduler_step'], gamma=opt['scheduler_gamma'])
+    _log.info('[%s] Model build Done. Use optim=%s, device=%s' % (time.ctime(), opt['optim_type'], device))
 
     best_mrr = 0.0
     for i_epoch in range(opt['epoch']):
@@ -146,6 +159,8 @@ def main(opt, _run, _log):
             train_loss.append(loss.item())
             loss.backward()
             optimizer.step()
+        if opt['use_scheduler']:
+            scheduler.step()
         _log.info('[%s] epoch#%d train Done, avg loss=%.5f' % (time.ctime(), i_epoch, sum(train_loss)/len(train_loss)))
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
