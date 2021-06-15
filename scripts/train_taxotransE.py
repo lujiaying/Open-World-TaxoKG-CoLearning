@@ -10,6 +10,7 @@ import random
 from typing import Tuple
 
 import numpy as np
+from scipy import sparse as spsp
 import torch as th
 from torch.utils.data import DataLoader
 import sacred
@@ -55,45 +56,73 @@ def my_config():
             }
 
 
-def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device, known_triples_map: dict) -> Tuple[float, float, float, float]:
+def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device, known_triples_map: dict, taxo_dict: dict) -> Tuple[float, float, float, float]:
     hits_1 = 0.0
     hits_3 = 0.0
     hits_10 = 0.0
     mrr = 0.0
     total_cnt = 0.0
 
-    ent_ids = th.arange(end=ent_count, device=device).unsqueeze(0)
-    for (batch_h, batch_r, batch_t) in data_loader:
-        batch_size = batch_h.size(0)
-        all_ents = ent_ids.repeat(batch_size, 1)    # B*ent_c
-        batch_h, batch_r, batch_t = batch_h.to(device), batch_r.to(device), batch_t.to(device)
-        batch_h = batch_h.reshape(-1, 1).repeat(1, all_ents.size(1))  # B*ent_c
-        batch_r = batch_r.reshape(-1, 1).repeat(1, all_ents.size(1))  # B*ent_c
-        batch_t = batch_t.reshape(-1, 1).repeat(1, all_ents.size(1))  # B*ent_c
+    # construct sparse adj matrix,
+    # option 1: from scipy
+    # option 2: from pytorch, however 1.7 not support two sparse mat multiply
+    row = []   # store coord
+    col = []   # store coord
+    data = []     # store entry values
+    for h, t_set in taxo_dict['p'].items():
+        for t in t_set:
+            row.append(h)
+            col.append(t)
+            data.append(1.0)
+            row.append(t)
+            col.append(h)
+            data.append(1.0)
+    adj = spsp.coo_matrix((data, (row, col)), shape=(ent_count, ent_count))   # (ent_c, ent_c)
+    adj = adj + spsp.eye(adj.shape[0])    # add self-loop
+    d_inv = 1.0 / np.array(adj.sum(1)).squeeze()   # (ent_c, ent_c)
+    d_inv = spsp.diags(d_inv)
+    # normalize use: D^-1 * A, where D is degree matrix
+    adj = d_inv.dot(adj).tocoo()    # (ent_c, ent_c)
 
-        # check all possible tails
-        triples = th.stack((batch_h, batch_r, all_ents), dim=2).reshape(-1, 3)  # (B*ent_c)*3
-        tail_preds = model(triples).reshape(batch_size, -1)   # B*ent_c
-        # check all possible heads
-        triples = th.stack((all_ents, batch_r, batch_t), dim=2).reshape(-1, 3)  # (B*ent_c)*3
-        head_preds = model(triples).reshape(batch_size, -1)   # B*ent_c
-        # get metrics
-        batch_h = batch_h[:, 0].unsqueeze(1)   # B*1
-        batch_r = batch_r[:, 0].unsqueeze(1)   # B*1
-        batch_t = batch_t[:, 0].unsqueeze(1)   # B*1
-        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(tail_preds, batch_h, batch_r, batch_t,
-                                                           is_tail_preds=True, known_triples_map=known_triples_map)
-        hits_1 += b_hits_1
-        hits_3 += b_hits_3
-        hits_10 += b_hits_10
-        mrr += b_mrr
-        b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(head_preds, batch_h, batch_r, batch_t,
-                                                           is_tail_preds=False, known_triples_map=known_triples_map)
-        hits_1 += b_hits_1
-        hits_3 += b_hits_3
-        hits_10 += b_hits_10
-        mrr += b_mrr
-        total_cnt += (2 * batch_size)
+    with th.no_grad():
+        i = th.LongTensor(np.vstack((adj.row, adj.col)))
+        v = th.FloatTensor(adj.data)
+        adj = th.sparse_coo_tensor(i, v, (ent_count, ent_count)).to(device)   # normalized adj matrix
+        all_embs = model.ent_emb.weight  # (ent_c, dim)
+        all_embs = th.sparse.mm(adj, all_embs)  # (ent_c, dim)
+
+        ent_ids = th.arange(end=ent_count, device=device).unsqueeze(0)
+        for (batch_h, batch_r, batch_t) in data_loader:
+            batch_size = batch_h.size(0)
+            all_ents = ent_ids.repeat(batch_size, 1)    # B*ent_c
+            batch_h, batch_r, batch_t = batch_h.to(device), batch_r.to(device), batch_t.to(device)   # (B, )
+            batch_h = batch_h.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+            batch_r = batch_r.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+            batch_t = batch_t.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+
+            # check all possible tails
+            triples = th.stack((batch_h, batch_r, all_ents), dim=2).reshape(-1, 3)  # (B*ent_c)*3
+            tail_preds = model.predict(triples, all_embs).reshape(batch_size, -1)   # B*ent_c
+            # check all possible heads
+            triples = th.stack((all_ents, batch_r, batch_t), dim=2).reshape(-1, 3)  # (B*ent_c)*3
+            head_preds = model.predict(triples, all_embs).reshape(batch_size, -1)   # B*ent_c
+            # get metrics
+            batch_h = batch_h[:, 0].unsqueeze(1)   # B*1
+            batch_r = batch_r[:, 0].unsqueeze(1)   # B*1
+            batch_t = batch_t[:, 0].unsqueeze(1)   # B*1
+            b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(tail_preds, batch_h, batch_r, batch_t,
+                                                               is_tail_preds=True, known_triples_map=known_triples_map)
+            hits_1 += b_hits_1
+            hits_3 += b_hits_3
+            hits_10 += b_hits_10
+            mrr += b_mrr
+            b_hits_1, b_hits_3, b_hits_10, b_mrr = cal_metrics(head_preds, batch_h, batch_r, batch_t,
+                                                               is_tail_preds=False, known_triples_map=known_triples_map)
+            hits_1 += b_hits_1
+            hits_3 += b_hits_3
+            hits_10 += b_hits_10
+            mrr += b_mrr
+            total_cnt += (2 * batch_size)
     return hits_1/total_cnt, hits_3/total_cnt, hits_10/total_cnt, mrr/total_cnt
 
 
@@ -120,8 +149,8 @@ def main(opt, _run, _log):
     train_set, dev_set, test_set, \
         ent_vocab, rel_vocab, train_triples, all_triples_map = prepare_ingredients(dataset_dir, opt['corpus_type'])
     train_iter = DataLoader(train_set, batch_size=opt['batch_size'], shuffle=True)
-    dev_iter = DataLoader(dev_set, batch_size=opt['batch_size']//4, shuffle=False)
-    test_iter = DataLoader(test_set, batch_size=opt['batch_size']//4, shuffle=False)
+    dev_iter = DataLoader(dev_set, batch_size=opt['batch_size']//8, shuffle=False)
+    test_iter = DataLoader(test_set, batch_size=opt['batch_size']//8, shuffle=False)
     _log.info('[%s] Load dataset Done, len=%d,%d,%d' % (time.ctime(),
               len(train_set), len(dev_set), len(test_set)))
     _log.info('corpus=%s, Entity cnt=%d, rel cnt=%d' % (opt['corpus_type'], len(ent_vocab), len(rel_vocab)))
@@ -172,7 +201,7 @@ def main(opt, _run, _log):
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
             model.eval()
-            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples_map)
+            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples_map, taxo_dict)
             _run.log_scalar("dev.hits1", hits_1, i_epoch)
             _run.log_scalar("dev.hits3", hits_3, i_epoch)
             _run.log_scalar("dev.hits10", hits_10, i_epoch)
@@ -188,7 +217,7 @@ def main(opt, _run, _log):
     model.load_state_dict(checkpoint)
     model = model.to(device)
     model.eval()
-    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples_map)
+    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples_map, taxo_dict)
     _run.log_scalar("test.hits1", hits_1)
     _run.log_scalar("test.hits3", hits_3)
     _run.log_scalar("test.hits10", hits_10)
