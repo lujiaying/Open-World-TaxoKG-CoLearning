@@ -17,7 +17,8 @@ import sacred
 from sacred.observers import FileStorageObserver
 from neptunecontrib.monitoring.sacred import NeptuneObserver
 
-from model.data_loader import prepare_ingredients, sample_negative_triples, get_taxo_parents_children
+from model.data_loader import prepare_ingredients, sample_negative_triples,\
+        get_taxo_parents_children, get_normalized_adj_matrix
 from model.TransE import cal_metrics
 from model.TaxoTransE import TaxoTransE
 
@@ -40,6 +41,7 @@ def my_config():
                'WN18RR': 'data/WN18RR',
                'CN100k': 'data/CN-100K'
                },
+           'aggre_type': 'mean',   # mean | 
            'batch_size': 128,
            'dist_norm': 1,
            'emb_dim': 100,
@@ -53,48 +55,26 @@ def my_config():
            'use_scheduler': True,
            'scheduler_step': 100,
            'scheduler_gamma': 0.5,
+           'adj_norm': 'sym',
             }
 
 
-def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device, known_triples_map: dict, taxo_dict: dict) -> Tuple[float, float, float, float]:
+def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device,
+         known_triples_map: dict, adj_taxo_p: spsp.csr_matrix,
+         adj_taxo_c: spsp.csr_matrix) -> Tuple[float, float, float, float]:
     hits_1 = 0.0
     hits_3 = 0.0
     hits_10 = 0.0
     mrr = 0.0
     total_cnt = 0.0
 
-    # construct sparse adj matrix,
-    # option 1: from scipy
-    # option 2: from pytorch, however 1.7 not support two sparse mat multiply
-    row = []   # store coord
-    col = []   # store coord
-    data = []     # store entry values
-    for h, t_set in taxo_dict['p'].items():
-        for t in t_set:
-            row.append(h)
-            col.append(t)
-            data.append(1.0)
-            row.append(t)
-            col.append(h)
-            data.append(1.0)
-    adj = spsp.coo_matrix((data, (row, col)), shape=(ent_count, ent_count))   # (ent_c, ent_c)
-    adj = adj + spsp.eye(adj.shape[0])    # add self-loop
-    d_inv = 1.0 / np.array(adj.sum(1)).squeeze()   # (ent_c, ent_c)
-    d_inv = spsp.diags(d_inv)
-    # normalize use: D^-1 * A, where D is degree matrix
-    adj = d_inv.dot(adj).tocoo()    # (ent_c, ent_c)
-
     with th.no_grad():
-        i = th.LongTensor(np.vstack((adj.row, adj.col)))
-        v = th.FloatTensor(adj.data)
-        adj = th.sparse_coo_tensor(i, v, (ent_count, ent_count)).to(device)   # normalized adj matrix
-        all_embs = model.ent_emb.weight  # (ent_c, dim)
-        all_embs = th.sparse.mm(adj, all_embs)  # (ent_c, dim)
+        ent_ids = th.arange(end=ent_count, device=device)  # ent_c
+        all_embs = model._aggregate_over_taxo(ent_ids, adj_taxo_p, adj_taxo_c, is_predict=True)     # ent_c*dim
 
-        ent_ids = th.arange(end=ent_count, device=device).unsqueeze(0)
         for (batch_h, batch_r, batch_t) in data_loader:
             batch_size = batch_h.size(0)
-            all_ents = ent_ids.repeat(batch_size, 1)    # B*ent_c
+            all_ents = ent_ids.unsqueeze(0).repeat(batch_size, 1)    # B*ent_c
             batch_h, batch_r, batch_t = batch_h.to(device), batch_r.to(device), batch_t.to(device)   # (B, )
             batch_h = batch_h.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
             batch_r = batch_r.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
@@ -144,6 +124,7 @@ def main(opt, _run, _log):
         os.makedirs(opt['checkpoint_dir'])
     # Setup essential vars
     dataset_dir = opt['dataset_dir'][opt['corpus_type']]
+    device = th.device('cuda') if opt['gpu'] else th.device('cpu')
 
     # Load corpus
     train_set, dev_set, test_set, \
@@ -155,11 +136,15 @@ def main(opt, _run, _log):
               len(train_set), len(dev_set), len(test_set)))
     _log.info('corpus=%s, Entity cnt=%d, rel cnt=%d' % (opt['corpus_type'], len(ent_vocab), len(rel_vocab)))
     taxo_dict = get_taxo_parents_children(train_triples, rel_vocab, opt['corpus_type'])
-    _log.info('taxo triples=%d (%.2f of total)' % (len(taxo_dict['p']), len(taxo_dict['p'])/len(train_triples)))
+    adj_taxo_p = get_normalized_adj_matrix(taxo_dict['p'], len(ent_vocab), opt['adj_norm'])
+    adj_taxo_c = get_normalized_adj_matrix(taxo_dict['c'], len(ent_vocab), opt['adj_norm'])
+    _log.info('[%s] taxo triples=%d (%.2f, %.2f of total)' % (time.ctime(), len(taxo_dict['p']), len(taxo_dict['p'])/len(train_triples), len(taxo_dict['c'])/len(train_triples)))
+    # _log.info('adj_taxo_p nnz=%d, shape=%s, adj_taxo_c nnz=%d, shape=%s' % (len(adj_taxo_p._values()), adj_taxo_p.size(), len(adj_taxo_c._values()), adj_taxo_c.size()))   # for th.sparse_coo_tensor
+    _log.info('adj_taxo_p nnz=%d, shape=%s, adj_taxo_c nnz=%d, shape=%s' % (adj_taxo_p.count_nonzero(), adj_taxo_p.shape, adj_taxo_c.count_nonzero(), adj_taxo_c.shape))
 
     # Build model
-    device = th.device('cuda') if opt['gpu'] else th.device('cpu')
-    model = TaxoTransE(len(ent_vocab), len(rel_vocab), taxo_dict, opt['dist_norm'], opt['emb_dim'])
+    model = TaxoTransE(len(ent_vocab), len(rel_vocab), norm=opt['dist_norm'],
+                       dim=opt['emb_dim'], aggre_type=opt['aggre_type'])
     model = model.to(device)
     criterion = th.nn.MarginRankingLoss(margin=opt['loss_margin'])
     criterion = criterion.to(device)
@@ -186,8 +171,8 @@ def main(opt, _run, _log):
             neg_triples = sample_negative_triples(batch_h, batch_r, batch_t, ent_vocab, train_triples)   # B*3
             pos_triples = pos_triples.to(device)
             neg_triples = neg_triples.to(device)
-            pos_scores = model(pos_triples)
-            neg_scores = model(neg_triples)
+            pos_scores = model(pos_triples, adj_taxo_p, adj_taxo_c)
+            neg_scores = model(neg_triples, adj_taxo_p, adj_taxo_c)
             target = pos_triples.new_tensor([-1])
             loss = criterion(pos_scores, neg_scores, target)
             train_loss.append(loss.item())
@@ -201,7 +186,7 @@ def main(opt, _run, _log):
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
             model.eval()
-            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples_map, taxo_dict)
+            hits_1, hits_3, hits_10, mrr = test(model, dev_iter, len(ent_vocab), device, all_triples_map, adj_taxo_p, adj_taxo_c)
             _run.log_scalar("dev.hits1", hits_1, i_epoch)
             _run.log_scalar("dev.hits3", hits_3, i_epoch)
             _run.log_scalar("dev.hits10", hits_10, i_epoch)
@@ -217,7 +202,7 @@ def main(opt, _run, _log):
     model.load_state_dict(checkpoint)
     model = model.to(device)
     model.eval()
-    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples_map, taxo_dict)
+    hits_1, hits_3, hits_10, mrr = test(model, test_iter, len(ent_vocab), device, all_triples_map, adj_taxo_p, adj_taxo_c)
     _run.log_scalar("test.hits1", hits_1)
     _run.log_scalar("test.hits3", hits_3)
     _run.log_scalar("test.hits10", hits_10)

@@ -5,10 +5,12 @@ Create Date: Jun 7, 2021
 """
 import random
 from collections import defaultdict
+from typing import Tuple
 
+import numpy as np
+from scipy import sparse as spsp
 import torch as th
 from torch.utils import data
-from typing import Tuple
 
 from utils.baselines import load_dataset
 
@@ -98,9 +100,53 @@ def get_taxo_parents_children(train_triple_ids: set, rel_vocab: dict, corpus_typ
     for (h, r, t) in train_triple_ids:
         if r not in taxo_rels:
             continue
-        taxo_dict['p'][h].add(t)
-        taxo_dict['c'][t].add(h)
+        taxo_dict['p'][h].add(t)   # h's parent is t
+        taxo_dict['c'][t].add(h)   # t's child is h
     return taxo_dict
+
+
+def scipy_sparse2_torch(adj: spsp.coo_matrix, size: tuple) -> th.sparse_coo_tensor:
+    if isinstance(adj, spsp.csr_matrix):
+        adj = adj.tocoo()
+    i = th.LongTensor(np.vstack((adj.row, adj.col)))
+    v = th.FloatTensor(adj.data)
+    adj_th = th.sparse_coo_tensor(i, v, size)   # normalized adj matrix
+    return adj_th
+
+
+def get_normalized_adj_matrix(adj_dict: dict, ent_count: int, norm: str) -> spsp.csr_matrix:
+    """
+    Args:
+        norm: str, options ['asym', 'sym']
+            'asym': D^-1 * A
+            'sym': D^-1/2 * A * D^-1/2
+    """
+    # construct sparse adj matrix,
+    # option 1: from scipy
+    # option 2: from pytorch, however 1.7 not support two sparse mat multiply
+    row = []   # store coord
+    col = []   # store coord
+    data = []     # store entry values
+    for h, t_set in adj_dict.items():
+        for t in t_set:
+            row.append(h)
+            col.append(t)
+            data.append(1.0)
+    adj = spsp.coo_matrix((data, (row, col)), shape=(ent_count, ent_count))   # (ent_c, ent_c)
+    D_inv = np.array(adj.sum(1)).squeeze()   # (ent_c, ) vector
+    if norm == 'asym':
+        D_inv = np.nan_to_num(np.power(D_inv, -1.0), posinf=0.0, neginf=0.0)
+        D_inv = spsp.diags(D_inv)    # (ent_c, ent_c)
+        adj = D_inv.dot(adj)       # (ent_c, ent_c)
+    elif norm == 'sym':
+        D_inv = np.nan_to_num(np.power(D_inv, -0.5), posinf=0.0, neginf=0.0)
+        D_inv = spsp.diags(D_inv)  # (ent_c, ent_c)
+        adj = D_inv.dot(adj).dot(D_inv)    # (ent_c, ent_c)
+        # adj = adj.tocoo()   # csr -> coo
+    else:
+        print('ERROR get_normalized_adj_matrix invalid norm=%s' % (norm))
+        exit(-1)
+    return adj
 
 
 if __name__ == '__main__':
