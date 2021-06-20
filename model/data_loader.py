@@ -86,16 +86,20 @@ def prepare_ingredients(dataset_dir: str, corpus_type: str)\
     return train_set, dev_set, test_set, ent_vocab, rel_vocab, train_triple_ids, all_triple_ids_map
 
 
-def get_taxo_parents_children(train_triple_ids: set, rel_vocab: dict, corpus_type: str) -> dict:
+def get_taxo_relations(corpus_type: str) -> list:
     if corpus_type == 'WN18RR':
         taxo_rels = ['_hypernym', '_instance_hypernym']
-        taxo_rels = [rel_vocab[_] for _ in taxo_rels]
     elif corpus_type == 'CN100k':
         taxo_rels = ['IsA']
-        taxo_rels = [rel_vocab[_] for _ in taxo_rels]
     else:
-        print('get_taxo_parents_children() invalid corpus_type=%s' % (corpus_type))
+        print('get_taxo_relations() invalid corpus_type=%s' % (corpus_type))
         exit(-1)
+    return taxo_rels
+
+
+def get_taxo_parents_children(train_triple_ids: set, rel_vocab: dict, corpus_type: str) -> dict:
+    taxo_rels = get_taxo_relations(corpus_type)
+    taxo_rels = [rel_vocab[_] for _ in taxo_rels]
     taxo_dict = {'p': defaultdict(set), 'c': defaultdict(set)}
     for (h, r, t) in train_triple_ids:
         if r not in taxo_rels:

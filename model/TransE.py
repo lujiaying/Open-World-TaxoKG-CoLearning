@@ -62,7 +62,7 @@ def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_
             ents_to_ignore = list(known_triples_map['t'][(t, r)])
             if h in ents_to_ignore:
                 ents_to_ignore.remove(h)
-        preds_to_ignore[i][ents_to_ignore] = th.finfo().max
+        preds_to_ignore[i][ents_to_ignore] = th.finfo().max   # make regarding distance infinite
     preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
     indices = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
     if is_tail_preds is True:

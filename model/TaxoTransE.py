@@ -18,7 +18,7 @@ from .data_loader import scipy_sparse2_torch
 
 class TaxoTransE(nn.Module):
     def __init__(self, ent_count: int, rel_count: int, norm: int = 1,
-                 dim: int = 100, aggre_type: str = 'mean'):
+                 dim: int = 100, aggre_type: str = 'mean', dropout=0.5):
         """
         Inspired by GraphSage, first aggregate over neighbours
         then concat self and neighbour embeddings
@@ -39,10 +39,11 @@ class TaxoTransE(nn.Module):
                                     embedding_dim=self.dim)
         self.rel_emb.weight.data.uniform_(-uniform_range, uniform_range)
         # learnable w for aggregate taxo entities
-        # TODO: bilinear to try, bilinear graph neural network with neighbor interactions
         if self.aggre_type == 'mean':
+            self.dropout = nn.Dropout(p=dropout)
+            self.eps = nn.Parameter(th.zeros(1))   # GIN trick for self emb
             self.emb_generator = nn.Sequential(
-                    nn.Linear(dim * 3, dim, bias=False),
+                    nn.Linear(dim * 3, dim, bias=True),
                     nn.GELU(),
                     )
         else:
@@ -75,7 +76,7 @@ class TaxoTransE(nn.Module):
                 batch_adj_taxo_c = adj_taxo_c[ents.cpu().numpy(), :]    # (batch, ent_c)
             batch_adj_taxo_c = scipy_sparse2_torch(batch_adj_taxo_c, (batch_size, ent_count)).to(device)
             emb_c = th.sparse.mm(batch_adj_taxo_c, self.ent_emb.weight)  # (batch, dim)
-            emb_ents = th.cat((emb_s, emb_p, emb_c), dim=1)  # (batch, dim*3)
+            emb_ents = th.cat(((1+self.eps) * emb_s, self.dropout(emb_p), self.dropout(emb_c)), dim=1)  # (batch, dim*2)
             emb_ents = self.emb_generator(emb_ents)          # (batch, dim)
         return emb_ents
 
