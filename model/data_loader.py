@@ -153,6 +153,15 @@ def get_normalized_adj_matrix(adj_dict: dict, ent_count: int, norm: str) -> spsp
     return adj
 
 
+def load_WN18RR_definition(fpath: str = "data/WN18RR/wordnet-mlj12-definitions.txt") -> dict:
+    wordnet_def = {}
+    with open(fpath) as fopen:
+        for line in fopen:
+            wid, word, explain = line.strip().split('\t')
+            wordnet_def[wid] = word
+    return wordnet_def
+
+
 if __name__ == '__main__':
     WN18RR_dir = 'data/WN18RR'
     train_set, dev_set, test_set, ent_vocab, rel_vocab, all_triples = prepare_ingredients(WN18RR_dir, 'WN18RR')

@@ -20,7 +20,7 @@ from neptunecontrib.monitoring.sacred import NeptuneObserver
 
 from model.data_loader import prepare_ingredients, sample_negative_triples,\
         get_taxo_parents_children, get_normalized_adj_matrix, get_taxo_relations
-from model.TransE import TransE, cal_metrics
+from model.TransE import TransE, cal_metrics, get_ranked_predction
 from .test_taxotransE import cal_taxo_nontaxo_metrics
 
 
@@ -100,6 +100,44 @@ def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: t
     return hits_1/total_cnt, hits_3/total_cnt, hits_10/total_cnt, mrr/total_cnt, (hits_1_rels, hits_3_rels, hits_10_rels, mrr_rels, total_cnt_rels)
 
 
+def case_study(model: th.nn.Module, data_loader: DataLoader, ent_count: int, device: th.device,
+               known_triples_map: dict, ent_vocab: dict, rel_vocab: dict):
+    ent_inv_vocab = {v: k for k, v in ent_vocab.items()}
+    rel_inv_vocab = {v: k for k, v in rel_vocab.items()}
+    # Mostly copy from test()
+    with th.no_grad():
+        ent_ids = th.arange(end=ent_count, device=device)  # ent_c
+        for (batch_h, batch_r, batch_t) in data_loader:
+            batch_size = batch_h.size(0)
+            all_ents = ent_ids.repeat(batch_size, 1)    # B*ent_c
+            batch_h, batch_r, batch_t = batch_h.to(device), batch_r.to(device), batch_t.to(device)   # (B, )
+            batch_h = batch_h.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+            batch_r = batch_r.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+            batch_t = batch_t.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
+
+            # check all possible tails
+            triples = th.stack((batch_h, batch_r, all_ents), dim=2).reshape(-1, 3)  # (B*ent_c)*3
+            tail_preds = model(triples).reshape(batch_size, -1)   # B*ent_c
+            # check all possible heads
+            triples = th.stack((all_ents, batch_r, batch_t), dim=2).reshape(-1, 3)  # (B*ent_c)*3
+            head_preds = model(triples).reshape(batch_size, -1)   # B*ent_c
+            # reshape for case study
+            batch_h = batch_h[:, 0].unsqueeze(1)   # B*1
+            batch_r = batch_r[:, 0].unsqueeze(1)   # B*1
+            batch_t = batch_t[:, 0].unsqueeze(1)   # B*1
+            for i in range(batch_size):
+                h = ent_inv_vocab[batch_h[i:i+1, :].item()]
+                r = rel_inv_vocab[batch_r[i:i+1, :].item()]
+                t = ent_inv_vocab[batch_t[i:i+1, :].item()]
+                indices = get_ranked_predction(tail_preds[i:i+1, :], batch_h[i:i+1, :], batch_r[i:i+1, :], batch_t[i:i+1, :],
+                                               is_tail_preds=True, known_triples_map=known_triples_map)
+                # indices shape: (1, ent_c)
+                print('gold triple: <%s, %s, %s>' % (h, r, t))
+                print('pred tails: %s' % ([ent_inv_vocab[_.item()] for _ in indices[0, :10]]))
+                if i > 5:
+                    return
+
+
 @ex.automain
 def test_model(config_path, checkpoint_path, _run, _log):
     if not config_path or not checkpoint_path:
@@ -141,3 +179,5 @@ def test_model(config_path, checkpoint_path, _run, _log):
     (taxo_hits_1, taxo_hits_3, taxo_hits_10, taxo_mrr), (nontaxo_hits_1, nontaxo_hits_3, nontaxo_hits_10, nontaxo_mrr) = cal_taxo_nontaxo_metrics(metrics_rels, taxo_rels)
     _log.info('[%s] TEST on best model, Taxo - hits@1,3,10=%.3f,%.3f,%.3f, mrr=%.3f' % (time.ctime(), taxo_hits_1, taxo_hits_3, taxo_hits_10, taxo_mrr))
     _log.info('[%s] TEST on best model, NonTaxo- hits@1,3,10=%.3f,%.3f,%.3f, mrr=%.3f' % (time.ctime(), nontaxo_hits_1, nontaxo_hits_3, nontaxo_hits_10, nontaxo_mrr))
+
+    case_study(model, test_iter, len(ent_vocab), device, all_triples_map, ent_vocab, rel_vocab)

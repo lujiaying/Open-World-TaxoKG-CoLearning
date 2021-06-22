@@ -44,13 +44,8 @@ class TransE(nn.Module):
         return score
 
 
-def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_t: th.Tensor, is_tail_preds: bool, known_triples_map: dict) -> Tuple[int, int, int, float]:
-    """
-    Args:
-        preds: shape=(B,ent_c)
-        batch_h,r,t: shape=(B,1)
-        known_triples_map: {'h': {(h,r):{t1,t2,t3...}}, 't': {}}
-    """
+def get_ranked_predction(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_t: th.Tensor,
+                         is_tail_preds: bool, known_triples_map: dict) -> th.Tensor:
     preds_to_ignore = preds.new_zeros(preds.size())  # non-zero entries for existing triples
     for i in range(preds.size(0)):
         h, r, t = batch_h[i].item(), batch_r[i].item(), batch_t[i].item()
@@ -65,6 +60,18 @@ def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_
         preds_to_ignore[i][ents_to_ignore] = th.finfo().max   # make regarding distance infinite
     preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
     indices = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
+    return indices
+
+
+def cal_metrics(preds: th.Tensor, batch_h: th.Tensor, batch_r: th.Tensor, batch_t: th.Tensor,
+                is_tail_preds: bool, known_triples_map: dict) -> Tuple[int, int, int, float]:
+    """
+    Args:
+        preds: shape=(B,ent_c)
+        batch_h,r,t: shape=(B,1)
+        known_triples_map: {'h': {(h,r):{t1,t2,t3...}}, 't': {}}
+    """
+    indices = get_ranked_predction(preds, batch_h, batch_r, batch_t, is_tail_preds, known_triples_map)
     if is_tail_preds is True:
         ground_truth = batch_t
     else:
