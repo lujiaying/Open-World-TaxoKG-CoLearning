@@ -5,7 +5,7 @@ Create Date: Jun 7, 2021
 """
 import random
 from collections import defaultdict
-from typing import Tuple
+from typing import Tuple, Any, Callable, List, Sequence
 
 import numpy as np
 from scipy import sparse as spsp
@@ -13,6 +13,9 @@ import torch as th
 from torch.utils import data
 
 from utils.baselines import load_dataset
+
+
+PAD_idx = 0
 
 
 class LinkPredDst(data.Dataset):
@@ -26,14 +29,14 @@ class LinkPredDst(data.Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[int, int, int]:
         (h, r, t) = self.triples[idx]
-        h = self.ent_vocab.get(h, self.ent_vocab['<PAD>'])
-        t = self.ent_vocab.get(t, self.ent_vocab['<PAD>'])
+        h = self.ent_vocab.get(h, self.ent_vocab['<UNK>'])
+        t = self.ent_vocab.get(t, self.ent_vocab['<UNK>'])
         r = self.rel_vocab.get(r)
         return h, r, t
 
 
 def get_vocabs(train_triples: list) -> tuple:
-    ent_vocab = {'<PAD>': 0}
+    ent_vocab = {'<PAD>': PAD_idx, '<UNK>': PAD_idx+1}
     rel_vocab = {}
     for (h, r, t) in train_triples:
         if r not in rel_vocab:
@@ -116,6 +119,70 @@ def scipy_sparse2_torch(adj: spsp.coo_matrix, size: tuple) -> th.sparse_coo_tens
     v = th.FloatTensor(adj.data)
     adj_th = th.sparse_coo_tensor(i, v, size)   # normalized adj matrix
     return adj_th
+
+
+def pad_sequence_to_length(
+    sequence: Sequence,
+    desired_length: int,
+    default_value: Callable[[], Any] = lambda: 0,
+    padding_on_right: bool = True,
+) -> List:
+    """
+    Take a list of objects and pads it to the desired length, returning the padded list.  The
+    original list is not modified.
+    # Parameters
+    sequence : `List`
+        A list of objects to be padded.
+    desired_length : `int`
+        Maximum length of each sequence. Longer sequences are truncated to this length, and
+        shorter ones are padded to it.
+    default_value: `Callable`, optional (default=`lambda: 0`)
+        Callable that outputs a default value (of any type) to use as padding values.  This is
+        a lambda to avoid using the same object when the default value is more complex, like a
+        list.
+    padding_on_right : `bool`, optional (default=`True`)
+        When we add padding tokens (or truncate the sequence), should we do it on the right or
+        the left?
+    # Returns
+    padded_sequence : `List`
+    """
+    sequence = list(sequence)
+    # Truncates the sequence to the desired length.
+    if padding_on_right:
+        padded_sequence = sequence[:desired_length]
+    else:
+        padded_sequence = sequence[-desired_length:]
+    # Continues to pad with default_value() until we reach the desired length.
+    pad_length = desired_length - len(padded_sequence)
+    # This just creates the default value once, so if it's a list, and if it gets mutated
+    # later, it could cause subtle bugs. But the risk there is low, and this is much faster.
+    values_to_pad = [default_value()] * pad_length
+    if padding_on_right:
+        padded_sequence = padded_sequence + values_to_pad
+    else:
+        padded_sequence = values_to_pad + padded_sequence
+    return padded_sequence
+
+
+def prepare_batch_taxo_ents(batch_ent: th.LongTensor, taxo_dict: dict) -> Tuple[th.LongTensor, th.LongTensor]:
+    """
+    Args:
+        batch_ent: shape = (batch, )
+    """
+    batch_p = []
+    batch_c = []
+    for ent in batch_ent:
+        p = sorted(list(taxo_dict['p'][ent.item()]))
+        c = sorted(list(taxo_dict['c'][ent.item()]))
+        batch_p.append(p)
+        batch_c.append(c)
+    max_len_p = max(len(_) for _ in batch_p)
+    max_len_c = max(len(_) for _ in batch_c)
+    batch_p = [pad_sequence_to_length(_, max_len_p, lambda: PAD_idx) for _ in batch_p]
+    batch_c = [pad_sequence_to_length(_, max_len_c, lambda: PAD_idx) for _ in batch_c]
+    batch_p = batch_ent.new_tensor(batch_p)   # (batch, max_len)
+    batch_c = batch_ent.new_tensor(batch_c)   # (batch, max_len)
+    return batch_p, batch_c
 
 
 def get_normalized_adj_matrix(adj_dict: dict, ent_count: int, norm: str) -> spsp.csr_matrix:

@@ -11,7 +11,6 @@ from scipy import sparse as spsp
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
-from allennlp.common.util import pad_sequence_to_length
 
 from .data_loader import scipy_sparse2_torch
 

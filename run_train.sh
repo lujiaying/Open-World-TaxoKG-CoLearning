@@ -48,3 +48,9 @@
 #      'opt.optim_lr=1e-2' 'opt.optim_wdecay=0.0'\
 #      'opt.loss_margin=5.0' 'opt.emb_dim=100' \
 #      'opt.scheduler_step=100' 'opt.scheduler_gamma=0.5'
+
+
+# Jun 22
+python -m scripts.train_att_taxotransE with 'motivation="debug"' \
+     'opt.gpu=False' 'opt.checkpoint_dir="checkpoints/AttTaxoTransE"'\
+     'opt.corpus_type="WN18RR"' 'opt.batch_size=16'
