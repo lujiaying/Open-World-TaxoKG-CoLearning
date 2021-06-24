@@ -5,12 +5,13 @@ Create Date: Jun 7, 2021
 """
 import random
 from collections import defaultdict
-from typing import Tuple, Any, Callable, List, Sequence
+from typing import Tuple
 
 import numpy as np
 from scipy import sparse as spsp
 import torch as th
 from torch.utils import data
+from allennlp.common.util import pad_sequence_to_length
 
 from utils.baselines import load_dataset
 
@@ -103,12 +104,14 @@ def get_taxo_relations(corpus_type: str) -> list:
 def get_taxo_parents_children(train_triple_ids: set, rel_vocab: dict, corpus_type: str) -> dict:
     taxo_rels = get_taxo_relations(corpus_type)
     taxo_rels = [rel_vocab[_] for _ in taxo_rels]
-    taxo_dict = {'p': defaultdict(set), 'c': defaultdict(set)}
+    taxo_dict = {'p': defaultdict(list), 'c': defaultdict(list)}
     for (h, r, t) in train_triple_ids:
         if r not in taxo_rels:
             continue
-        taxo_dict['p'][h].add(t)   # h's parent is t
-        taxo_dict['c'][t].add(h)   # t's child is h
+        if t not in taxo_dict['p'][h]:
+            taxo_dict['p'][h].append(t)   # h's parent is t
+        if h not in taxo_dict['c'][t]:
+            taxo_dict['c'][t].append(h)   # t's child is h
     return taxo_dict
 
 
@@ -121,68 +124,29 @@ def scipy_sparse2_torch(adj: spsp.coo_matrix, size: tuple) -> th.sparse_coo_tens
     return adj_th
 
 
-def pad_sequence_to_length(
-    sequence: Sequence,
-    desired_length: int,
-    default_value: Callable[[], Any] = lambda: 0,
-    padding_on_right: bool = True,
-) -> List:
-    """
-    Take a list of objects and pads it to the desired length, returning the padded list.  The
-    original list is not modified.
-    # Parameters
-    sequence : `List`
-        A list of objects to be padded.
-    desired_length : `int`
-        Maximum length of each sequence. Longer sequences are truncated to this length, and
-        shorter ones are padded to it.
-    default_value: `Callable`, optional (default=`lambda: 0`)
-        Callable that outputs a default value (of any type) to use as padding values.  This is
-        a lambda to avoid using the same object when the default value is more complex, like a
-        list.
-    padding_on_right : `bool`, optional (default=`True`)
-        When we add padding tokens (or truncate the sequence), should we do it on the right or
-        the left?
-    # Returns
-    padded_sequence : `List`
-    """
-    sequence = list(sequence)
-    # Truncates the sequence to the desired length.
-    if padding_on_right:
-        padded_sequence = sequence[:desired_length]
-    else:
-        padded_sequence = sequence[-desired_length:]
-    # Continues to pad with default_value() until we reach the desired length.
-    pad_length = desired_length - len(padded_sequence)
-    # This just creates the default value once, so if it's a list, and if it gets mutated
-    # later, it could cause subtle bugs. But the risk there is low, and this is much faster.
-    values_to_pad = [default_value()] * pad_length
-    if padding_on_right:
-        padded_sequence = padded_sequence + values_to_pad
-    else:
-        padded_sequence = values_to_pad + padded_sequence
-    return padded_sequence
-
-
-def prepare_batch_taxo_ents(batch_ent: th.LongTensor, taxo_dict: dict) -> Tuple[th.LongTensor, th.LongTensor]:
+def prepare_batch_taxo_ents(batch_ent: th.LongTensor, taxo_dict: dict) -> Tuple[Tuple[th.LongTensor, th.LongTensor], Tuple[th.LongTensor, th.LongTensor]]:
     """
     Args:
         batch_ent: shape = (batch, )
     """
     batch_p = []
     batch_c = []
+    lens_p = []
+    lens_c = []
     for ent in batch_ent:
-        p = sorted(list(taxo_dict['p'][ent.item()]))
-        c = sorted(list(taxo_dict['c'][ent.item()]))
+        p = taxo_dict['p'][ent.item()]
+        c = taxo_dict['c'][ent.item()]
         batch_p.append(p)
         batch_c.append(c)
-    max_len_p = max(len(_) for _ in batch_p)
-    max_len_c = max(len(_) for _ in batch_c)
+        lens_p.append(len(p))
+        lens_c.append(len(c))
+    max_len_p = max(lens_p)
+    max_len_c = max(lens_c)
     batch_p = [pad_sequence_to_length(_, max_len_p, lambda: PAD_idx) for _ in batch_p]
     batch_c = [pad_sequence_to_length(_, max_len_c, lambda: PAD_idx) for _ in batch_c]
     batch_p = batch_ent.new_tensor(batch_p)   # (batch, max_len)
     batch_c = batch_ent.new_tensor(batch_c)   # (batch, max_len)
-    return batch_p, batch_c
+    return (batch_p, batch_ent.new_tensor(lens_p)), (batch_c, batch_ent.new_tensor(lens_c))
 
 
 def get_normalized_adj_matrix(adj_dict: dict, ent_count: int, norm: str) -> spsp.csr_matrix:
