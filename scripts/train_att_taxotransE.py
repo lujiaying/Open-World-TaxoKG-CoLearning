@@ -66,21 +66,15 @@ def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, rel_count
     total_cnt = 0.0
 
     with th.no_grad():
-        rel_ids = th.arange(end=rel_count, device=device)   # rel_c
-        all_embs_rels = []
-        for rel_id in rel_ids:
-            emb_r = model._get_r_emb(rel_id).unsqueeze(0)   # (1, dim)
-            all_embs = []
-            ent_start = 0
-            bsize = 128
-            while ent_start < ent_count:
-                ent_ids = th.arange(ent_start, min(ent_count, ent_start+bsize), device=device)  # (bsize)
-                ent_start += bsize
-                embs = model._aggregate_over_taxo(ent_ids, emb_r.repeat(ent_ids.size(0), 1), taxo_dict)
-                all_embs.append(embs)
-            all_embs = th.cat(all_embs, dim=0)   # (ent_c, dim)
-            all_embs_rels.append(all_embs)
-        all_embs_rels = th.stack(all_embs_rels, dim=0)  # (rel_c, ent_c, dim)
+        all_embs = []
+        ent_start = 0
+        bsize = 128
+        while ent_start < ent_count:
+            ent_ids = th.arange(ent_start, min(ent_count, ent_start+bsize), device=device)  # (bsize)
+            ent_start += bsize
+            embs = model._aggregate_over_taxo(ent_ids, taxo_dict)
+            all_embs.append(embs)
+        all_embs = th.cat(all_embs, dim=0)   # (ent_c, dim)
 
         ent_ids = th.arange(end=ent_count, device=device)  # ent_c
         for (batch_h, batch_r, batch_t) in data_loader:
@@ -92,10 +86,10 @@ def test(model: th.nn.Module, data_loader: DataLoader, ent_count: int, rel_count
             batch_t = batch_t.reshape(-1, 1).repeat(1, ent_count)  # B*ent_c
             # check all possible tails
             triples = th.stack((batch_h, batch_r, all_ents), dim=2).reshape(-1, 3)  # (B*ent_c)*3
-            tail_preds = model.predict(triples, all_embs_rels).reshape(batch_size, -1)   # B*ent_c
+            tail_preds = model.predict(triples, all_embs).reshape(batch_size, -1)   # B*ent_c
             # check all possible heads
             triples = th.stack((all_ents, batch_r, batch_t), dim=2).reshape(-1, 3)  # (B*ent_c)*3
-            head_preds = model.predict(triples, all_embs_rels).reshape(batch_size, -1)   # B*ent_c
+            head_preds = model.predict(triples, all_embs).reshape(batch_size, -1)   # B*ent_c
             # get metrics
             batch_h = batch_h[:, 0].unsqueeze(1)   # B*1
             batch_r = batch_r[:, 0].unsqueeze(1)   # B*1

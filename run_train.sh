@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG-TransE
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_TaxoTransE
+#SBATCH --output=logs/slurm_AttTaxoTransE
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -51,6 +51,7 @@
 
 
 # Jun 22
-python -m scripts.train_att_taxotransE with 'motivation="debug"' \
-     'opt.gpu=False' 'opt.checkpoint_dir="checkpoints/AttTaxoTransE"'\
-     'opt.corpus_type="WN18RR"' 'opt.batch_size=16'
+python -m scripts.train_att_taxotransE with 'motivation="remove r in attn score"' \
+     'opt.gpu=True' 'opt.checkpoint_dir="checkpoints/AttTaxoTransE"'\
+     'opt.corpus_type="WN18RR"' 'opt.optim_lr=1e-2' \
+     'opt.attn_dim=16' 'opt.loss_margin=3.0'
