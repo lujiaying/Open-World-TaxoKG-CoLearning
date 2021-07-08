@@ -12,9 +12,10 @@ from typing import Tuple, Dict
 import tqdm
 from avro.datafile import DataFileReader
 from avro.io import DatumReader
+import numpy as np
 
 
-def load_Probase(Probase_path: str) -> dict:
+def load_Probase(Probase_path: str, do_analysis: bool = False) -> dict:
     concept_pairs = defaultdict(set)   # c: {parent1, parent2}
     concept_set = set()
     pair_cnt = 0
@@ -33,10 +34,13 @@ def load_Probase(Probase_path: str) -> dict:
         del lines
     print('Probase # of pairs=%d, unique # of instances=%d' % (pair_cnt, len(concept_pairs)))
     print('unique # of concepts=%d' % (len(concept_set)))
+    if do_analysis:
+        analysis_concept_pairs(concept_pairs)
     return concept_pairs
 
 
 def analysis_concept_pairs(concept_pairs: Dict[str, set]):
+    # concept_pairs: {ent1: {c1, c2, ...}, ent2: {}, ...}
     triple_cnt = 0
     avg_parent = []
     reverse_concept_pairs = defaultdict(set)
@@ -53,8 +57,8 @@ def analysis_concept_pairs(concept_pairs: Dict[str, set]):
         all_concepts.add(p)
         all_concepts.update(cs)
     avg_child = sum(avg_child) / len(avg_child)
-    print('#hyponym=%d, #hypernym=%d, #triple=%d' % (len(concept_pairs), len(reverse_concept_pairs),
-                                                     triple_cnt))
+    print('#entity=%d, #concept=%d, #triple=%d' % (len(concept_pairs), len(reverse_concept_pairs),
+                                                   triple_cnt))
     print('Avg #Parent=%.2f, Avg #Child=%.2f' % (avg_parent, avg_child))
     # cal avg level
     # first find leaf concepts
@@ -62,33 +66,43 @@ def analysis_concept_pairs(concept_pairs: Dict[str, set]):
     print('#concept=%d' % (len(all_concepts)))
     concept_level = dict()
     to_remove = set()
-    for c in all_concepts:
-        if c not in reverse_concept_pairs:
-            concept_level[c] = 1.0
-            to_remove.add(c)
+    for ent in concept_pairs:
+        if ent not in reverse_concept_pairs:
+            concept_level[ent] = 0.0   # ent only serves as instance
+            to_remove.add(ent)
     all_concepts.difference_update(to_remove)
-    print('#leaf concept=%d' % (len(concept_level)))
+    print('#pure instance=%d' % (len(concept_level)))
     iteration_cnt = 0
     while len(all_concepts) > 0:
-        remains = set()
+        to_remove = set()
         for ent in all_concepts:
             # if all children are in concept_level dict,
             # then remove ent from all_concepts
             if all(child in concept_level for child in reverse_concept_pairs[ent]):
                 level = max(concept_level[child] for child in reverse_concept_pairs[ent]) + 1.0
                 concept_level[ent] = level
-            else:
-                remains.add(ent)
-        all_concepts = remains
+                to_remove.add(ent)
+        all_concepts.difference_update(to_remove)
         iteration_cnt += 1
-        if iteration_cnt > 10:
+        if iteration_cnt > 20:
             print('deadlock!! remains all_concepts=%d' % (len(all_concepts)))
-            '''
+            # concept graph may contain mutual dependent concept-subconcept pair, e.g. A: B, C;   C: A, D
+            # calculate approx level for these
             for ent in all_concepts:
-                print('%s: %s' % (ent, reverse_concept_pairs[ent]))
-            '''
+                level = max(concept_level.get(child, 1.0) for child in reverse_concept_pairs[ent]) + 1.0
+                concept_level[ent] = level
+            # for ent in all_concepts:
+            #     unresloved_children = [c for c in reverse_concept_pairs[ent] if c not in concept_level]
+            #     print('%s: %s not resloved (total %d)' % (ent, unresloved_children, len(reverse_concept_pairs[ent])))
             break
+    concept_level = {k: v for k, v in concept_level.items() if v > 0.0}
     print('Avg level=%.2f' % (sum(concept_level.values()) / len(concept_level)))
+    print('Max level=%d' % (max(concept_level.values())))
+    # concept instances distribution
+    instance_cnts = [len(cs) for cs in reverse_concept_pairs.values()]
+    bins = [0, 10, 20, 30, 40, 50, max(instance_cnts)]
+    hist, _ = np.histogram(instance_cnts, bins)
+    print('concept distribution of bins(%s): %s' % (bins, ' | '.join([str(_) for _ in hist])))
 
 
 def load_SemEval(data_path: str, gold_path: str, do_analysis: bool = False) -> dict:
@@ -98,13 +112,14 @@ def load_SemEval(data_path: str, gold_path: str, do_analysis: bool = False) -> d
             gold_line = fopen2.readline()
             hyponym = data_line.strip().split('\t')[0]
             hypernyms = gold_line.strip().split('\t')
+            hypernyms = [h for h in hypernyms if h != hyponym]
             concept_pairs[hyponym].update(hypernyms)
     if do_analysis:
         analysis_concept_pairs(concept_pairs)
     return concept_pairs
 
 
-def load_merged_SemEval(file_path: str) -> dict:
+def load_merged_SemEval(file_path: str, do_analysis: bool = False) -> dict:
     concept_pairs = defaultdict(set)   # c: {parent1, parent2}
     with open(file_path) as fopen:
         for line in tqdm.tqdm(fopen):
@@ -112,6 +127,8 @@ def load_merged_SemEval(file_path: str) -> dict:
             c = line_list[0]
             ps = line_list[1:]
             concept_pairs[c] = ps
+    if do_analysis:
+        analysis_concept_pairs(concept_pairs)
     return concept_pairs
 
 
@@ -130,40 +147,28 @@ def analysis_SemEval(train_gold_path: str, test_gold_path: str):
                                               len(train_hypernyms.intersection(test_hypernyms))))
 
 
-def align_Probase_ReVerb(Probase_path: str, ReVerb_path: str):
-    concept_pairs = load_Probase(Probase_path)
-    grounded_concepts = defaultdict(int)
-    grounded_concepts_entities = defaultdict(set)
-    with open(ReVerb_path) as fopen:
+def align_Probase_ReVerb(Probase_path: str, ReVerb_path: str, output_path: str, CM_type: str = "Probase"):
+    if CM_type == "Probase":
+        concept_pairs = load_Probase(Probase_path)
+    elif CM_type == "SemEval":
+        concept_pairs = load_merged_SemEval(Probase_path)
+    else:
+        print('ERROR invalid CM_type=%s' % (CM_type))
+        exit(0)
+    with open(ReVerb_path) as fopen, open(output_path, 'w') as fwrite:
         tik = time.perf_counter()
         lines = fopen.readlines()
         elapsed_time = time.perf_counter() - tik
         print('Readlines ReVerb, elapsed_time=%s' % (elapsed_time))
         for line in tqdm.tqdm(lines):
             line_list = line.strip().split('\t')
-            arg1_norm = line_list[4]
-            # rel_norm = line_list[5]
+            arg1_norm = line_list[4]   # norm is already lowercased
+            rel_norm = line_list[5]
             arg2_norm = line_list[6]
-            if arg1_norm in concept_pairs:
-                for p in concept_pairs[arg1_norm]:
-                    grounded_concepts[p] += 1
-                    grounded_concepts_entities[p].add(arg1_norm)
-            if arg2_norm in concept_pairs:
-                for p in concept_pairs[arg2_norm]:
-                    grounded_concepts[p] += 1
-                    grounded_concepts_entities[p].add(arg2_norm)
+            if arg1_norm not in concept_pairs and arg2_norm not in concept_pairs:
+                continue
+            fwrite.write('%s\t%s\t%s\n' % (arg1_norm, rel_norm, arg2_norm))
         del lines
-    print('Grounded ReVerb concepts=%d' % (len(grounded_concepts)))
-    # cnt >= 50, <50
-    manyshot_concepts = len([(k, v) for k, v in grounded_concepts.items() if v >= 50])
-    print('>=50 triples concepts=%d' % (manyshot_concepts))
-    fewshot_concepts = len([(k, v) for k, v in grounded_concepts.items() if v < 50])
-    print('<50 triples concepts=%d' % (fewshot_concepts))
-    # entity_cnt >=50, <50
-    manyshot_concepts = len([(k, v) for k, v in grounded_concepts_entities.items() if len(v) >= 50])
-    print('>=50 entities concepts=%d' % (manyshot_concepts))
-    fewshot_concepts = len([(k, v) for k, v in grounded_concepts_entities.items() if len(v) < 50])
-    print('<50 entities concepts=%d' % (fewshot_concepts))
 
 
 def _get_lemma_wikilink(tok_list: list) -> Tuple[str, str]:
@@ -203,6 +208,8 @@ def align_Probase_OPIEC(Probase_path: str, OPIEC_path: str, OPIEC_aligned_path: 
             subj_lem, subj_wikilink = _get_lemma_wikilink(triple['subject'])
             rel_lem, rel_wikilink = _get_lemma_wikilink(triple['relation'])
             obj_lem, obj_wikilink = _get_lemma_wikilink(triple['object'])
+            subj_lem = subj_lem.lower()
+            obj_lem = obj_lem.lower()
             if subj_lem not in concept_pairs and obj_lem not in concept_pairs:
                 continue
             if subj_lem in concept_pairs:
@@ -251,6 +258,8 @@ def merge_SemEval_train_dev_test_sets(dataset_dir: str, dataset_name: str):
     out_path = '%s/%s.merged_pairs.txt' % (dataset_dir, dataset_name)
     with open(out_path, 'w') as fwrite:
         for c, ps in concept_pairs.items():
+            c = c.lower()
+            ps = [p.lower() for p in ps]
             fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
 
 
@@ -261,16 +270,18 @@ def load_OPIEC_wiki_mention_map(OPIEC_mention_map_path: str) -> Tuple[dict, dict
         for line in fopen:
             line_list = line.strip().split('\t')
             wiki = line_list[0]
-            mentions = line_list[1:]
-            wiki_mention_map[wiki] = set(mentions)
+            mentions = set([_.lower() for _ in line_list[1:]])
+            wiki_mention_map[wiki] = mentions
             for m in mentions:
                 mention_wiki_map[m].add(wiki)
     return wiki_mention_map, mention_wiki_map
 
 
 def align_SemEval_OPIEC_mentions(SemEval_path: str, OPIEC_mention_map_path: str, aligned_SemEval_path: str):
-    # find SemEval hyponyms that exsit in OPIEC mentions
-    # Store filtered SemEval concept pairs
+    """
+    Store filtered SemEval concept pairs
+    find SemEval hyponyms that exsit in OPIEC mentions
+    """
     wiki_mention_map, mention_wiki_map = load_OPIEC_wiki_mention_map(OPIEC_mention_map_path)
     concept_maps = defaultdict(set)
     with open(SemEval_path) as fopen, open(aligned_SemEval_path, 'w') as fwrite:
@@ -287,6 +298,9 @@ def align_SemEval_OPIEC_mentions(SemEval_path: str, OPIEC_mention_map_path: str,
 
 
 def align_Probase_OPIEC_mentions(Probase_path: str, OPIEC_mention_map_path: str, aligned_Probase_path: str):
+    """
+    Store filtered concept pairs
+    """
     wiki_mention_map, mention_wiki_map = load_OPIEC_wiki_mention_map(OPIEC_mention_map_path)
     all_concept_maps = load_Probase(Probase_path)
     concept_maps = defaultdict(set)
@@ -299,25 +313,71 @@ def align_Probase_OPIEC_mentions(Probase_path: str, OPIEC_mention_map_path: str,
     analysis_concept_pairs(concept_maps)
 
 
+def analysis_openie_triples(OPIEC_triple_path: str):
+    print('start analysis openie triples in %s' % (OPIEC_triple_path))
+    mention_set = set()
+    relation_set = set()
+    line_cnt = 0
+    with open(OPIEC_triple_path) as fopen:
+        for line in tqdm.tqdm(fopen):
+            line_list = line.strip('\n').split('\t')
+            # subj_m, rel_m, obj_m, subj, rel, obj = line.strip('\n').split('\t')
+            subj_m = line_list[0]
+            rel_m = line_list[1]
+            obj_m = line_list[2]
+            mention_set.add(subj_m)
+            mention_set.add(obj_m)
+            relation_set.add(rel_m)
+            line_cnt += 1
+    print('#rel, #mention, #triple: ')
+    print('| %s | %s | %s |' % (len(relation_set), len(mention_set), line_cnt))
+
+
+def store_filtered_ConceptPairs_ReVerb(CM_path: str, CM_type: str, ReVerb_path: str, out_path: str):
+    mention_set = set()
+    with open(ReVerb_path) as fopen:
+        for line in tqdm.tqdm(fopen):
+            line_list = line.strip().split('\t')
+            arg1_norm = line_list[4]   # norm is already lowercased
+            arg2_norm = line_list[6]
+            mention_set.add(arg1_norm)
+            mention_set.add(arg2_norm)
+    print('OpenIE Triple=%s loaded' % (ReVerb_path))
+    if CM_type == "Probase":
+        concept_pairs = load_Probase(CM_path)
+    elif CM_type == "SemEval":
+        concept_pairs = load_merged_SemEval(CM_path)
+    else:
+        print('ERROR invalid CM_type=%s' % (CM_type))
+        exit(0)
+    print('Concept Graph=%s Loaded.' % (CM_path))
+    to_remove = set()
+    for c in concept_pairs:
+        if c not in mention_set:
+            to_remove.add(c)
+    concept_pairs = {k: v for k, v in concept_pairs.items() if k not in to_remove}
+    analysis_concept_pairs(concept_pairs)
+    with open(out_path, 'w') as fwrite:
+        for c, ps in concept_pairs.items():
+            fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
+
+
 if __name__ == '__main__':
-    Probase_path = 'data/MSConceptGraph/data-concept-instance-relations.txt'
-    ReVerb_path = 'data/ReVerb/reverb_clueweb_tuples-1.1.txt'
-    # ReVerb_out_path = 'data/ReVerb/tuples_grounded_MSConceptGraph.txt'
-    # ReVerb_path = 'data/ReVerb/reverb_wikipedia_tuples-1.1.txt'
-    # align_Probase_ReVerb(Probase_path, ReVerb_path)
+    # Notes: ConceptGraphs are stored as lower case
 
     # OPIEC_path = 'data/OPIEC/OPIEC-Linked-example.avro'
     # OPIEC_aligned_path = 'data/OPIEC/OPIEC-Linked-example.Probase-aligned.txt'
-    # OPIEC_path = 'data/OPIEC/OPIEC-Linked-triples'
-    # OPIEC_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
-    # align_Probase_OPIEC(Probase_path, OPIEC_path, OPIEC_aligned_path)
+    OPIEC_path = 'data/OPIEC/OPIEC-Linked-triples'
+    OPIEC_Probase_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
+    # align_Probase_OPIEC(Probase_path, OPIEC_path, OPIEC_Probase_aligned_path)
     OPIEC_wiki_mention_path = 'data/OPIEC/OPIEC-Linked-triples.Wiki-mentions.txt'
     # produce_OPIEC_mention_wiki_map(OPIEC_path, OPIEC_wiki_mention_path)
 
+    SemEval_medical_train_data = 'data/SemEval2018-Task9/training/data/2A.medical.training.data.txt'
     SemEval_medical_train_gold = 'data/SemEval2018-Task9/training/gold/2A.medical.training.gold.txt'
     SemEval_medical_test_data = 'data/SemEval2018-Task9/test/data/2A.medical.test.data.txt'
     SemEval_medical_test_gold = 'data/SemEval2018-Task9/test/gold/2A.medical.test.gold.txt'
-    # load_SemEval(SemEval_medical_data, SemEval_medical_gold, True)
+    # load_SemEval(SemEval_medical_test_data, SemEval_medical_test_gold, True)
     # analysis_SemEval(SemEval_medical_train_gold, SemEval_medical_test_gold)
     SemEval_music_train_data = 'data/SemEval2018-Task9/training/data/2B.music.training.data.txt'
     SemEval_music_train_gold = 'data/SemEval2018-Task9/training/gold/2B.music.training.gold.txt'
@@ -341,13 +401,43 @@ if __name__ == '__main__':
     # align_SemEval_OPIEC_mentions(SemEval_medical_path, OPIEC_wiki_mention_path, aligned_SemEval_medical_path)
 
     OPIEC_path = 'data/OPIEC/OPIEC-Linked-triples'
-    OPIEC_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMusic-aligned.txt'
-    # align_Probase_OPIEC(SemEval_music_path, OPIEC_path, OPIEC_aligned_path, CM_type="SemEval")
-    OPIEC_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMedical-aligned.txt'
-    # align_Probase_OPIEC(SemEval_medical_path, OPIEC_path, OPIEC_aligned_path, CM_type="SemEval")
+    OPIEC_music_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMusic-aligned.txt'
+    # align_Probase_OPIEC(SemEval_music_path, OPIEC_path, OPIEC_music_aligned_path, CM_type="SemEval")
+    OPIEC_medical_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMedical-aligned.txt'
+    # align_Probase_OPIEC(SemEval_medical_path, OPIEC_path, OPIEC_medical_aligned_path, CM_type="SemEval")
 
     # Probase / MSConceptGraph
     OPIEC_wiki_mention_path = 'data/OPIEC/OPIEC-Linked-triples.Wiki-mentions.txt'
     Probase_path = 'data/MSConceptGraph/data-concept-instance-relations.txt'
     aligned_Probase_path = 'data/MSConceptGraph/instance-concepts.OPIEC-aligned.txt'
-    align_Probase_OPIEC_mentions(Probase_path, OPIEC_wiki_mention_path, aligned_Probase_path)
+    # align_Probase_OPIEC_mentions(Probase_path, OPIEC_wiki_mention_path, aligned_Probase_path)
+
+    # Aligned concept graph STAT
+    # load_merged_SemEval(aligned_Probase_path, do_analysis=True)
+    # load_merged_SemEval(aligned_SemEval_medical_path, do_analysis=True)
+    # load_merged_SemEval(aligned_SemEval_music_path, do_analysis=True)
+    # OpenIE triple STAT
+    # analysis_openie_triples(OPIEC_medical_aligned_path)
+    # analysis_openie_triples(OPIEC_music_aligned_path)
+
+    # ReVerb as Open Knowledge
+    Probase_path = 'data/MSConceptGraph/data-concept-instance-relations.txt'
+    # ReVerb_path = 'data/ReVerb/reverb_wikipedia_tuples-1.1.txt'
+    ReVerb_path = 'data/ReVerb/reverb_clueweb_tuples-1.1.txt'
+    ReVerb_out_path = 'data/ReVerb/reverb_clueweb_tuples.Probase-aligned.txt'
+    # align_Probase_ReVerb(Probase_path, ReVerb_path, Reverb_out_path)
+    # analysis_openie_triples(ReVerb_out_path)
+    Probase_ReVerb_aligned_path = 'data/MSConceptGraph/data-concept-instance-relations.ReVerb-aligned.txt'
+    # store_filtered_ConceptPairs_ReVerb(Probase_path, 'Probase', ReVerb_path, Probase_ReVerb_aligned_path)
+    SemEval_medical_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.txt'
+    ReVerb_medical_out_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMedical-aligned.txt'
+    # align_Probase_ReVerb(SemEval_medical_path, ReVerb_path, ReVerb_medical_out_path, CM_type="SemEval")
+    # analysis_openie_triples(ReVerb_medical_out_path)
+    SemEval_medical_ReVerb_aligned_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.ReVerb-aligned.txt'
+    # store_filtered_ConceptPairs_ReVerb(SemEval_medical_path, 'SemEval', ReVerb_path, SemEval_medical_ReVerb_aligned_path)
+    SemEval_music_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.txt'
+    ReVerb_music_out_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMusic-aligned.txt'
+    # align_Probase_ReVerb(SemEval_music_path, ReVerb_path, ReVerb_music_out_path, CM_type='SemEval')
+    # analysis_openie_triples(ReVerb_music_out_path)
+    SemEval_music_ReVerb_aligned_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
+    # store_filtered_ConceptPairs_ReVerb(SemEval_music_path, 'SemEval', ReVerb_path, SemEval_music_ReVerb_aligned_path)
