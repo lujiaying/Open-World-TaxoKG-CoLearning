@@ -8,6 +8,7 @@ import os
 import time
 from collections import defaultdict
 from typing import Tuple, Dict
+import random
 
 import tqdm
 from avro.datafile import DataFileReader
@@ -39,7 +40,7 @@ def load_Probase(Probase_path: str, do_analysis: bool = False) -> dict:
     return concept_pairs
 
 
-def analysis_concept_pairs(concept_pairs: Dict[str, set]):
+def analysis_concept_pairs(concept_pairs: Dict[str, set], full_analysis: bool = True):
     # concept_pairs: {ent1: {c1, c2, ...}, ent2: {}, ...}
     triple_cnt = 0
     avg_parent = []
@@ -60,6 +61,8 @@ def analysis_concept_pairs(concept_pairs: Dict[str, set]):
     print('#entity=%d, #concept=%d, #triple=%d' % (len(concept_pairs), len(reverse_concept_pairs),
                                                    triple_cnt))
     print('Avg #Parent=%.2f, Avg #Child=%.2f' % (avg_parent, avg_child))
+    if not full_analysis:
+        return
     # cal avg level
     # first find leaf concepts
     # then find concepts with all children exist
@@ -100,7 +103,7 @@ def analysis_concept_pairs(concept_pairs: Dict[str, set]):
     print('Max level=%d' % (max(concept_level.values())))
     # concept instances distribution
     instance_cnts = [len(cs) for cs in reverse_concept_pairs.values()]
-    bins = [0, 10, 20, 30, 40, 50, max(instance_cnts)]
+    bins = [0, 2, 10, 20, 30, 40, 50, max(instance_cnts)]
     hist, _ = np.histogram(instance_cnts, bins)
     print('concept distribution of bins(%s): %s' % (bins, ' | '.join([str(_) for _ in hist])))
 
@@ -322,6 +325,8 @@ def analysis_openie_triples(OPIEC_triple_path: str):
         for line in tqdm.tqdm(fopen):
             line_list = line.strip('\n').split('\t')
             # subj_m, rel_m, obj_m, subj, rel, obj = line.strip('\n').split('\t')
+            if len(line_list) < 3:
+                continue
             subj_m = line_list[0]
             rel_m = line_list[1]
             obj_m = line_list[2]
@@ -362,6 +367,107 @@ def store_filtered_ConceptPairs_ReVerb(CM_path: str, CM_type: str, ReVerb_path: 
             fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
 
 
+def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
+                         out_dir: str, setting: str = 'rich'):
+    def _write_concept_pairs_to_file(concept_pairs: Dict[str, set], out_path: str):
+        with open(out_path, 'w') as fwrite:
+            for c, ps in concept_pairs.items():
+                fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
+        return
+    random.seed(1105)
+    if setting == 'rich':
+        concept_entity_threshold = 40  # >= 40
+    elif setting == 'limited':
+        concept_entity_threshold = 1   # >= 1
+    else:
+        print('invalid arg setting=%s' % (setting))
+        exit(-1)
+    # filter out invalid concept pairs
+    all_concept_pairs = load_merged_SemEval(aligned_concept_path)
+    reverse_concept_pairs = defaultdict(set)  # p: {c1, c2}
+    for c, ps in all_concept_pairs.items():
+        for p in ps:
+            reverse_concept_pairs[p].add(c)
+    kept_concepts = set()
+    for p, cs in reverse_concept_pairs.items():
+        if len(cs) >= concept_entity_threshold:
+            kept_concepts.add(p)
+    concept_pairs = defaultdict(set)   # c: {parent1, parent2}
+    for c, ps in all_concept_pairs.items():
+        kept_ps = set()
+        for p in ps:
+            if p in kept_concepts:
+                kept_ps.add(p)
+        if len(kept_ps) <= 0:
+            continue
+        concept_pairs[c] = kept_ps
+    print('After filtering, #ent=%d, #cep=%d' % (len(concept_pairs), len(kept_concepts)))
+    train_ent_cnt = int(len(concept_pairs) * 0.55)
+    test_ent_cnt = int(len(concept_pairs) * 0.35)
+    print('pre-computed train_ent_cnt=%d, test_ent_cnt=%d' % (train_ent_cnt, test_ent_cnt))
+    # dev_ent_cnt = len(concept_pairs) - train_ent_cnt - test_ent_cnt
+    train_concept_pairs = defaultdict(set)
+    test_concept_pairs = defaultdict(set)
+    dev_concept_pairs = defaultdict(set)
+    all_entities = list(concept_pairs.keys())
+    # first assign one entity of each concept into train test set
+    for ent in all_entities:
+        if len(train_concept_pairs) < train_ent_cnt:
+            train_concept_pairs[ent] = concept_pairs[ent]
+        elif len(test_concept_pairs) < test_ent_cnt:
+            test_concept_pairs[ent] = concept_pairs[ent]
+        else:
+            dev_concept_pairs[ent] = concept_pairs[ent]
+    print('CG - train set')
+    analysis_concept_pairs(train_concept_pairs, False)
+    print('CG - dev set')
+    analysis_concept_pairs(dev_concept_pairs, False)
+    print('CG - test set')
+    analysis_concept_pairs(test_concept_pairs, False)
+    # write to files
+    cg_train_path = '%s/cg_pairs.train.txt' % (out_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (out_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (out_dir)
+    _write_concept_pairs_to_file(train_concept_pairs, cg_train_path)
+    _write_concept_pairs_to_file(dev_concept_pairs, cg_dev_path)
+    _write_concept_pairs_to_file(test_concept_pairs, cg_test_path)
+    # split openie triples according to ratio
+    total_triple_cnt = 0
+    with open(aligned_openie_path) as fopen:
+        for line in fopen:
+            total_triple_cnt += 1
+    train_cnt = int(total_triple_cnt * 0.80)
+    test_cnt = int(total_triple_cnt * 0.15)
+    dev_cnt = total_triple_cnt - train_cnt - test_cnt
+    indices = list(range(total_triple_cnt))
+    random.shuffle(indices)
+    test_indices = set(indices[train_cnt:train_cnt+test_cnt])
+    dev_indices = set(indices[-dev_cnt:])
+    oie_train_path = '%s/oie_triples.train.txt' % (out_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (out_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (out_dir)
+    fwrite_train = open(oie_train_path, 'w')
+    fwrite_dev = open(oie_dev_path, 'w')
+    fwrite_test = open(oie_test_path, 'w')
+    with open(aligned_openie_path) as fopen:
+        for idx, line in enumerate(fopen):
+            if idx in dev_indices:
+                fwrite_dev.write(line)
+            elif idx in test_indices:
+                fwrite_test.write(line)
+            else:
+                fwrite_train.write(line)
+    fwrite_train.close()
+    fwrite_dev.close()
+    fwrite_test.close()
+    print('OIE - train set')
+    analysis_openie_triples(oie_train_path)
+    print('OIE - dev set')
+    analysis_openie_triples(oie_dev_path)
+    print('OIE - test set')
+    analysis_openie_triples(oie_test_path)
+
+
 if __name__ == '__main__':
     # Notes: ConceptGraphs are stored as lower case
 
@@ -399,7 +505,7 @@ if __name__ == '__main__':
     SemEval_medical_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.txt'
     aligned_SemEval_medical_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.OPIEC-aligned.txt'
     # align_SemEval_OPIEC_mentions(SemEval_medical_path, OPIEC_wiki_mention_path, aligned_SemEval_medical_path)
-
+    # Step3: filter out openIE triples
     OPIEC_path = 'data/OPIEC/OPIEC-Linked-triples'
     OPIEC_music_aligned_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMusic-aligned.txt'
     # align_Probase_OPIEC(SemEval_music_path, OPIEC_path, OPIEC_music_aligned_path, CM_type="SemEval")
@@ -417,6 +523,7 @@ if __name__ == '__main__':
     # load_merged_SemEval(aligned_SemEval_medical_path, do_analysis=True)
     # load_merged_SemEval(aligned_SemEval_music_path, do_analysis=True)
     # OpenIE triple STAT
+    # analysis_openie_triples(OPIEC_Probase_aligned_path)
     # analysis_openie_triples(OPIEC_medical_aligned_path)
     # analysis_openie_triples(OPIEC_music_aligned_path)
 
@@ -441,3 +548,16 @@ if __name__ == '__main__':
     # analysis_openie_triples(ReVerb_music_out_path)
     SemEval_music_ReVerb_aligned_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
     # store_filtered_ConceptPairs_ReVerb(SemEval_music_path, 'SemEval', ReVerb_path, SemEval_music_ReVerb_aligned_path)
+    # Aligned concept graph STAT for ReVerb x ConceptGraphs
+    # load_merged_SemEval(Probase_ReVerb_aligned_path, do_analysis=True)
+    # load_merged_SemEval(SemEval_medical_ReVerb_aligned_path, do_analysis=True)
+    # load_merged_SemEval(SemEval_music_ReVerb_aligned_path, do_analysis=True)
+
+    # Split train dev test
+    aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.ReVerb-aligned.txt'
+    aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMedical-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
+    aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
+    aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMusic-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
+    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')

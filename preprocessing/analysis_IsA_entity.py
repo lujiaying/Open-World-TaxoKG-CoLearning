@@ -4,6 +4,7 @@ Author: Jiaying Lu
 Create Date: Jul 9, 2021
 """
 import re
+from collections import defaultdict
 
 import gzip
 import tqdm
@@ -69,7 +70,31 @@ def analysis_DBpedia(DBpedia_type_path: str, DBpedia_fact_path: str):
             entity_isA_set.add(head)
     print('before union all_cnt=%d' % (len(entity_set)))
     isA_cnt = len(entity_isA_set)
-    entity_set = entity_set.union(entity_isA_set)
+    # entity_set = entity_set.union(entity_isA_set)   # takes too much time
+    all_cnt = len(entity_set)
+    print('#IsA=%d over %d, %.2f%%' % (isA_cnt, all_cnt, isA_cnt / all_cnt * 100))
+
+
+def analysis_Freebase(data_path: str):
+    fopen = gzip.open(data_path, 'rt')
+    regex = re.compile(r'[^"\s]\S*|".+?"@en')
+    taxonomy_rels = ['<http://rdf.freebase.com/ns/type.type.instance>', '<http://rdf.freebase.com/ns/type.object.type>', '<http://rdf.freebase.com/ns/type.property.expected_type>']
+    entity_set = set()
+    entity_isA_set = set()
+    for line in tqdm.tqdm(fopen):
+        line_list = regex.findall(line.strip())
+        head = line_list[0]
+        rel = line_list[1]
+        tail = line_list[2]
+        entity_set.add(head)
+        if tail.startswith('<http://'):
+            entity_set.add(head)
+        if rel in taxonomy_rels:
+            entity_isA_set.add(head)
+            if tail.startswith('<http://'):
+                entity_isA_set.add(tail)
+    fopen.close()
+    isA_cnt = len(entity_isA_set)
     all_cnt = len(entity_set)
     print('#IsA=%d over %d, %.2f%%' % (isA_cnt, all_cnt, isA_cnt / all_cnt * 100))
 
@@ -85,3 +110,6 @@ if __name__ == '__main__':
     DBpedia_type_path = 'data/DBpedia/instance-types_lang=en_specific.ttl'
     DBpedia_fact_path = 'data/DBpedia/infobox-properties_lang=en.ttl'
     # analysis_DBpedia(DBpedia_type_path, DBpedia_fact_path)
+
+    Freebase_dump_path = 'data/Freebase/freebase-rdf-latest.gz'
+    analysis_Freebase(Freebase_dump_path)
