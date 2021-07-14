@@ -334,8 +334,8 @@ def analysis_openie_triples(OPIEC_triple_path: str):
             mention_set.add(obj_m)
             relation_set.add(rel_m)
             line_cnt += 1
-    print('#rel, #mention, #triple: ')
-    print('| %s | %s | %s |' % (len(relation_set), len(mention_set), line_cnt))
+    print('#mention, #rel, #triple: ')
+    print('| %s | %s | %s |' % (len(mention_set), len(relation_set), line_cnt))
 
 
 def store_filtered_ConceptPairs_ReVerb(CM_path: str, CM_type: str, ReVerb_path: str, out_path: str):
@@ -378,7 +378,7 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     if setting == 'rich':
         concept_entity_threshold = 40  # >= 40
     elif setting == 'limited':
-        concept_entity_threshold = 1   # >= 1
+        concept_entity_threshold = 3   # >= 1
     else:
         print('invalid arg setting=%s' % (setting))
         exit(-1)
@@ -410,7 +410,6 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     test_concept_pairs = defaultdict(set)
     dev_concept_pairs = defaultdict(set)
     all_entities = list(concept_pairs.keys())
-    # first assign one entity of each concept into train test set
     for ent in all_entities:
         if len(train_concept_pairs) < train_ent_cnt:
             train_concept_pairs[ent] = concept_pairs[ent]
@@ -431,11 +430,21 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     _write_concept_pairs_to_file(train_concept_pairs, cg_train_path)
     _write_concept_pairs_to_file(dev_concept_pairs, cg_dev_path)
     _write_concept_pairs_to_file(test_concept_pairs, cg_test_path)
+    # filter out triples that not align with kept entities
     # split openie triples according to ratio
-    total_triple_cnt = 0
+    kept_lines = []
     with open(aligned_openie_path) as fopen:
         for line in fopen:
-            total_triple_cnt += 1
+            line_list = line.strip().split('\t')
+            if len(line_list) < 3:
+                continue
+            subj, rel, obj = line_list[0], line_list[1], line_list[2]
+            if len(subj) <= 0 or len(rel) <= 0 or len(obj) <= 0:
+                continue
+            if subj not in concept_pairs and obj not in concept_pairs:
+                continue
+            kept_lines.append('%s\t%s\t%s\n' % (subj, rel, obj))
+    total_triple_cnt = len(kept_lines)
     train_cnt = int(total_triple_cnt * 0.80)
     test_cnt = int(total_triple_cnt * 0.15)
     dev_cnt = total_triple_cnt - train_cnt - test_cnt
@@ -449,14 +458,13 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     fwrite_train = open(oie_train_path, 'w')
     fwrite_dev = open(oie_dev_path, 'w')
     fwrite_test = open(oie_test_path, 'w')
-    with open(aligned_openie_path) as fopen:
-        for idx, line in enumerate(fopen):
-            if idx in dev_indices:
-                fwrite_dev.write(line)
-            elif idx in test_indices:
-                fwrite_test.write(line)
-            else:
-                fwrite_train.write(line)
+    for idx, line in enumerate(kept_lines):
+        if idx in dev_indices:
+            fwrite_dev.write(line)
+        elif idx in test_indices:
+            fwrite_test.write(line)
+        else:
+            fwrite_train.write(line)
     fwrite_train.close()
     fwrite_dev.close()
     fwrite_test.close()
@@ -560,4 +568,20 @@ if __name__ == '__main__':
     aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMusic-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
-    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    aligned_concept_path = 'data/MSConceptGraph/data-concept-instance-relations.ReVerb-aligned.txt'
+    aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.Probase-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
+    aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.OPIEC-aligned.txt'
+    aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMedical-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.OPIEC-aligned.txt'
+    aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMusic-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    aligned_concept_path = 'data/MSConceptGraph/instance-concepts.OPIEC-aligned.txt'
+    aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
+    out_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
+    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
