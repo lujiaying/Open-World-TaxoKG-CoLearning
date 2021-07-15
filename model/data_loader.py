@@ -138,11 +138,11 @@ def prepare_ingredients_transE(dataset_dir: str) -> tuple:
     oie_triples_test = load_oie_triples(oie_test_path)
     tok_vocab, mention_vocab = get_vocabs(cg_triples_train, oie_triples_train)
     train_set = CGCOLPTriplesDst(cg_triples_train+oie_triples_train, tok_vocab)
-    dev_cg_set = CGCOLPTriplesDst(cg_triples_dev, tok_vocab)
+    # dev_cg_set = CGCOLPTriplesDst(cg_triples_dev, tok_vocab)
     dev_oie_set = CGCOLPTriplesDst(oie_triples_dev, tok_vocab)
-    test_cg_set = CGCOLPTriplesDst(cg_triples_test, tok_vocab)
+    # test_cg_set = CGCOLPTriplesDst(cg_triples_test, tok_vocab)
     test_oie_set = CGCOLPTriplesDst(oie_triples_test, tok_vocab)
-    return train_set, tok_vocab, mention_vocab, concept_vocab
+    return train_set, cg_pairs_dev, dev_oie_set, cg_pairs_test, test_oie_set, tok_vocab, mention_vocab, concept_vocab
 
 
 def collate_fn_transE(data):
