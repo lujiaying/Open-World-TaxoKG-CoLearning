@@ -11,8 +11,6 @@ from typing import Tuple, Dict
 import random
 
 import tqdm
-from avro.datafile import DataFileReader
-from avro.io import DatumReader
 import numpy as np
 
 
@@ -183,6 +181,8 @@ def _get_lemma_wikilink(tok_list: list) -> Tuple[str, str]:
 
 
 def align_Probase_OPIEC(Probase_path: str, OPIEC_path: str, OPIEC_aligned_path: str, CM_type: str = "Probase"):
+    from avro.datafile import DataFileReader
+    from avro.io import DatumReader
     if CM_type == "Probase":
         concept_pairs = load_Probase(Probase_path)
     elif CM_type == "SemEval":
@@ -227,6 +227,8 @@ def align_Probase_OPIEC(Probase_path: str, OPIEC_path: str, OPIEC_aligned_path: 
 
 
 def produce_OPIEC_mention_wiki_map(OPIEC_path: str, output_path: str):
+    from avro.datafile import DataFileReader
+    from avro.io import DatumReader
     wiki_mention_dict = defaultdict(set)
     if os.path.isfile(OPIEC_path):
         all_paths = [OPIEC_path]
@@ -505,6 +507,7 @@ if __name__ == '__main__':
     # Step 1: Merge data gold to get concept pairs
     # merge_SemEval_train_dev_test_sets('data/SemEval2018-Task9', '2B.music')
     # merge_SemEval_train_dev_test_sets('data/SemEval2018-Task9', '2A.medical')
+    # merge_SemEval_train_dev_test_sets('data/SemEval2018-Task9', '1A.english')
     # Step 2: align entity with openIE triples, keep aligned ones and analysis
     OPIEC_wiki_mention_path = 'data/OPIEC/OPIEC-Linked-triples.Wiki-mentions.txt'
     SemEval_music_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.txt'
@@ -584,4 +587,4 @@ if __name__ == '__main__':
     aligned_concept_path = 'data/MSConceptGraph/instance-concepts.OPIEC-aligned.txt'
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
-    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
