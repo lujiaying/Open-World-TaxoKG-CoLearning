@@ -42,7 +42,8 @@ def collate_fn_triples(data: list) -> tuple:
     h_batch = [pad_sequence_to_length(_, h_max_len, lambda: PAD_idx) for _ in hs]
     r_batch = [pad_sequence_to_length(_, r_max_len, lambda: PAD_idx) for _ in rs]
     t_batch = [pad_sequence_to_length(_, t_max_len, lambda: PAD_idx) for _ in ts]
-    return th.LongTensor(h_batch), th.LongTensor(r_batch), th.LongTensor(t_batch), th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens)
+    return (th.LongTensor(h_batch), th.LongTensor(r_batch), th.LongTensor(t_batch),
+            th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens))
 
 
 class CGCPairsDst(data.Dataset):
@@ -67,6 +68,41 @@ def collate_fn_CGCpairs(data) -> Tuple[th.LongTensor, list]:
     ent_max_len = max(ent_lens)
     ent_batch = [pad_sequence_to_length(_, ent_max_len, lambda: PAD_idx) for _ in ent_l]
     return th.LongTensor(ent_batch), ceps_l, th.LongTensor(ent_lens)
+
+
+class OLPTriplesDst(data.Dataset):
+    def __init__(self, triples: list, tok_vocab: dict, mention_vocab: dict, rel_vocab: dict):
+        self.triples = []
+        for h, r, t in triples:
+            h_num = [tok_vocab.get(_, PAD_idx) for _ in h.split(' ')]
+            r_num = [tok_vocab.get(_, PAD_idx) for _ in r.split(' ')]
+            t_num = [tok_vocab.get(_, PAD_idx) for _ in t.split(' ')]
+            h_mid = mention_vocab[h]
+            r_rid = rel_vocab[r]
+            t_mid = mention_vocab[t]
+            self.triples.append((h_num, r_num, t_num, h_mid, r_rid, t_mid))
+
+    def __len__(self) -> int:
+        return len(self.triples)
+
+    def __getitem__(self, idx: int) -> Tuple[list, list, list, int, int, int]:
+        return self.triples[idx]
+
+
+def collate_fn_oie_triples(data: list) -> tuple:
+    hs, rs, ts, h_mids, r_rids, t_mids = zip(*data)
+    h_lens = [len(_) for _ in hs]
+    r_lens = [len(_) for _ in rs]
+    t_lens = [len(_) for _ in ts]
+    h_max_len = max(h_lens)
+    r_max_len = max(r_lens)
+    t_max_len = max(t_lens)
+    h_batch = [pad_sequence_to_length(_, h_max_len, lambda: PAD_idx) for _ in hs]
+    r_batch = [pad_sequence_to_length(_, r_max_len, lambda: PAD_idx) for _ in rs]
+    t_batch = [pad_sequence_to_length(_, t_max_len, lambda: PAD_idx) for _ in ts]
+    return (th.LongTensor(h_batch), th.LongTensor(r_batch), th.LongTensor(t_batch),
+            th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens),
+            h_mids, r_rids, t_mids)
 
 
 def load_cg_pairs(fpath: str) -> Dict[str, set]:
@@ -124,32 +160,10 @@ def load_oie_triples(fpath: str) -> List[Tuple[str, str, str]]:
     return triples
 
 
-def get_vocabs(cg_triples_train: list, oie_triples_train: list) -> Tuple[dict, dict]:
-    tok_vocab = {'<PAD>': PAD_idx, '<UNK>': PAD_idx+1}
-    mention_vocab = {}
-    for subj, rel, obj in oie_triples_train:
-        if subj not in mention_vocab:
-            mention_vocab[subj] = len(mention_vocab)
-        if obj not in mention_vocab:
-            mention_vocab[obj] = len(mention_vocab)
-        for tok in (' '.join([subj, rel, obj])).split(' '):
-            if tok not in tok_vocab:
-                tok_vocab[tok] = len(tok_vocab)
-    for ent, rel, cep in cg_triples_train:
-        for tok in (' '.join([ent, rel, cep])).split(' '):
-            if tok not in tok_vocab:
-                tok_vocab[tok] = len(tok_vocab)
-    return tok_vocab, mention_vocab
-
-
-def prepare_ingredients_transE(dataset_dir: str) -> tuple:
-    # Load Concept Graph
-    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
-    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
-    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
-    cg_pairs_train = load_cg_pairs(cg_train_path)
-    cg_pairs_dev = load_cg_pairs(cg_dev_path)
-    cg_pairs_test = load_cg_pairs(cg_test_path)
+def get_concept_vocab(cg_pairs_train: dict, cg_pairs_dev: dict, cg_pairs_test: dict) -> Dict[str, int]:
+    """
+    Concepts from train, valid and test set
+    """
     concept_vocab = {}
     for cep_set in cg_pairs_train.values():
         for cep in cep_set:
@@ -163,9 +177,50 @@ def prepare_ingredients_transE(dataset_dir: str) -> tuple:
         for cep in cep_set:
             if cep not in concept_vocab:
                 concept_vocab[cep] = len(concept_vocab)
+    return concept_vocab
+
+
+def get_tok_vocab(cg_triples_train: list, oie_triples_train: list) -> Dict[str, int]:
+    """
+    Tokens only from train set
+    """
+    tok_vocab = {'<PAD>': PAD_idx, '<UNK>': PAD_idx+1}
+    for subj, rel, obj in oie_triples_train:
+        for tok in (' '.join([subj, rel, obj])).split(' '):
+            if tok not in tok_vocab:
+                tok_vocab[tok] = len(tok_vocab)
+    for ent, rel, cep in cg_triples_train:
+        for tok in (' '.join([ent, rel, cep])).split(' '):
+            if tok not in tok_vocab:
+                tok_vocab[tok] = len(tok_vocab)
+    return tok_vocab
+
+
+def get_mention_rel_vocabs(oie_triples_train: list, oie_triples_dev: list, oie_triples_test: list) -> Tuple[dict, dict]:
+    mention_vocab = {}
+    rel_vocab = {}
+    for subj, rel, obj in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        if subj not in mention_vocab:
+            mention_vocab[subj] = len(mention_vocab)
+        if obj not in mention_vocab:
+            mention_vocab[obj] = len(mention_vocab)
+        if rel not in rel_vocab:
+            rel_vocab[rel] = len(rel_vocab)
+    return mention_vocab, rel_vocab
+
+
+def prepare_ingredients_transE(dataset_dir: str) -> tuple:
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
     cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
-    cg_triples_dev = cg_pairs_to_cg_triples(cg_pairs_dev)
-    cg_triples_test = cg_pairs_to_cg_triples(cg_pairs_test)
+    # cg_triples_dev = cg_pairs_to_cg_triples(cg_pairs_dev)
+    # cg_triples_test = cg_pairs_to_cg_triples(cg_pairs_test)
     # Load Open KG
     oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
     oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
@@ -173,13 +228,20 @@ def prepare_ingredients_transE(dataset_dir: str) -> tuple:
     oie_triples_train = load_oie_triples(oie_train_path)
     oie_triples_dev = load_oie_triples(oie_dev_path)
     oie_triples_test = load_oie_triples(oie_test_path)
-    tok_vocab, mention_vocab = get_vocabs(cg_triples_train, oie_triples_train)
+    tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
+    mention_vocab, rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for OLP filtered eval setting
+    for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        all_triple_ids_map['h'][(mention_vocab[h], rel_vocab[r])].add(mention_vocab[t])
+        all_triple_ids_map['t'][(mention_vocab[t], rel_vocab[r])].add(mention_vocab[h])
     train_set = CGCOLPTriplesDst(cg_triples_train+oie_triples_train, tok_vocab)
     dev_cg_set = CGCPairsDst(cg_pairs_dev, tok_vocab, concept_vocab)
-    dev_oie_set = CGCOLPTriplesDst(oie_triples_dev, tok_vocab)
+    dev_oie_set = OLPTriplesDst(oie_triples_dev, tok_vocab, mention_vocab, rel_vocab)
     test_cg_set = CGCPairsDst(cg_pairs_test, tok_vocab, concept_vocab)
-    test_oie_set = CGCOLPTriplesDst(oie_triples_test, tok_vocab)
-    return train_set, dev_cg_set, dev_oie_set, test_cg_set, test_oie_set, tok_vocab, mention_vocab, concept_vocab
+    test_oie_set = OLPTriplesDst(oie_triples_test, tok_vocab, mention_vocab, rel_vocab)
+    return (train_set, dev_cg_set, dev_oie_set, test_cg_set, test_oie_set,
+            tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
 
 
 def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTensor:

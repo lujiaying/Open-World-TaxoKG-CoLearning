@@ -76,8 +76,8 @@ class OpenTransE(nn.Module):
         neg_scores = self._cal_distance(corrupt_h_embs, r_embs, corrupt_t_embs)
         return pos_scores, neg_scores
 
-    def test_CGC(self, h_batch: th.LongTensor, r_batch: th.LongTensor, all_cep_emb: th.FloatTensor,
-                 h_lens: th.LongTensor, r_lens: th.LongTensor) -> th.Tensor:
+    def test_tail_pred(self, h_batch: th.LongTensor, r_batch: th.LongTensor, all_cep_emb: th.FloatTensor,
+                       h_lens: th.LongTensor, r_lens: th.LongTensor) -> th.Tensor:
         """
         Args:
             h_batch, t_batch: size = (B, max_l)
@@ -91,4 +91,21 @@ class OpenTransE(nn.Module):
         r_embs = r_embs.repeat_interleave(cep_cnt, dim=0)  # (B*cep_cnt, emb_d)
         all_cep_emb = all_cep_emb.repeat_interleave(B, dim=0)    # (B*cep_cnt, emb_d)
         score = self._cal_distance(h_embs, r_embs, all_cep_emb)   # (B*cep_cnt, )
+        return score.reshape(B, cep_cnt)
+
+    def test_head_pred(self, t_batch: th.LongTensor, r_batch: th.LongTensor, all_cep_emb: th.FloatTensor,
+                       t_lens: th.LongTensor, r_lens: th.LongTensor) -> th.Tensor:
+        """
+        Args:
+            t_batch, t_batch: size = (B, max_l)
+            all_cep_emb: size = (cep_cnt, emb_d)
+        """
+        cep_cnt = all_cep_emb.size(0)
+        B = t_batch.size(0)
+        t_embs = self._get_composition_emb(t_batch, t_lens, self.mention_func)  # (B, emb_d)
+        r_embs = self._get_composition_emb(r_batch, r_lens, self.rel_func)  # (B, emb_d)
+        t_embs = t_embs.repeat_interleave(cep_cnt, dim=0)  # (B*cep_cnt, emb_d)
+        r_embs = r_embs.repeat_interleave(cep_cnt, dim=0)  # (B*cep_cnt, emb_d)
+        all_cep_emb = all_cep_emb.repeat_interleave(B, dim=0)    # (B*cep_cnt, emb_d)
+        score = self._cal_distance(all_cep_emb, r_embs, t_embs)   # (B*cep_cnt, )
         return score.reshape(B, cep_cnt)
