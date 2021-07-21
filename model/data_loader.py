@@ -16,13 +16,12 @@ PAD_idx = 0
 
 class CGCOLPTriplesDst(data.Dataset):
     def __init__(self, triples: list, tok_vocab: dict):
-        triples_numerical = []
+        self.triples = []
         for h, r, t in triples:
             h_num = [tok_vocab.get(_, PAD_idx) for _ in h.split(' ')]
             r_num = [tok_vocab.get(_, PAD_idx) for _ in r.split(' ')]
             t_num = [tok_vocab.get(_, PAD_idx) for _ in t.split(' ')]
-            triples_numerical.append((h_num, r_num, t_num))
-        self.triples = triples_numerical
+            self.triples.append((h_num, r_num, t_num))
 
     def __len__(self) -> int:
         return len(self.triples)
@@ -30,6 +29,44 @@ class CGCOLPTriplesDst(data.Dataset):
     def __getitem__(self, idx: int) -> Tuple[list, list, list]:
         (h, r, t) = self.triples[idx]
         return h, r, t
+
+
+def collate_fn_triples(data: list) -> tuple:
+    hs, rs, ts = zip(*data)
+    h_lens = [len(_) for _ in hs]
+    r_lens = [len(_) for _ in rs]
+    t_lens = [len(_) for _ in ts]
+    h_max_len = max(h_lens)
+    r_max_len = max(r_lens)
+    t_max_len = max(t_lens)
+    h_batch = [pad_sequence_to_length(_, h_max_len, lambda: PAD_idx) for _ in hs]
+    r_batch = [pad_sequence_to_length(_, r_max_len, lambda: PAD_idx) for _ in rs]
+    t_batch = [pad_sequence_to_length(_, t_max_len, lambda: PAD_idx) for _ in ts]
+    return th.LongTensor(h_batch), th.LongTensor(r_batch), th.LongTensor(t_batch), th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens)
+
+
+class CGCPairsDst(data.Dataset):
+    def __init__(self, cg_pairs: Dict[str, set], tok_vocab: dict, concept_vocab: dict):
+        self.pairs = []
+        for ent, concepts in cg_pairs.items():
+            ent_num = [tok_vocab.get(_, PAD_idx) for _ in ent.split(' ')]  # L-token length
+            concepts_nums = [concept_vocab[_] for _ in concepts]   # k concepts length
+            self.pairs.append((ent_num, concepts_nums))
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int) -> Tuple[list, list]:
+        (ent, ceps) = self.pairs[idx]
+        return ent, ceps
+
+
+def collate_fn_CGCpairs(data) -> Tuple[th.LongTensor, list]:
+    ent_l, ceps_l = zip(*data)
+    ent_lens = [len(_) for _ in ent_l]
+    ent_max_len = max(ent_lens)
+    ent_batch = [pad_sequence_to_length(_, ent_max_len, lambda: PAD_idx) for _ in ent_l]
+    return th.LongTensor(ent_batch), ceps_l, th.LongTensor(ent_lens)
 
 
 def load_cg_pairs(fpath: str) -> Dict[str, set]:
@@ -138,25 +175,23 @@ def prepare_ingredients_transE(dataset_dir: str) -> tuple:
     oie_triples_test = load_oie_triples(oie_test_path)
     tok_vocab, mention_vocab = get_vocabs(cg_triples_train, oie_triples_train)
     train_set = CGCOLPTriplesDst(cg_triples_train+oie_triples_train, tok_vocab)
-    # dev_cg_set = CGCOLPTriplesDst(cg_triples_dev, tok_vocab)
+    dev_cg_set = CGCPairsDst(cg_pairs_dev, tok_vocab, concept_vocab)
     dev_oie_set = CGCOLPTriplesDst(oie_triples_dev, tok_vocab)
-    # test_cg_set = CGCOLPTriplesDst(cg_triples_test, tok_vocab)
+    test_cg_set = CGCPairsDst(cg_pairs_test, tok_vocab, concept_vocab)
     test_oie_set = CGCOLPTriplesDst(oie_triples_test, tok_vocab)
-    return train_set, cg_pairs_dev, dev_oie_set, cg_pairs_test, test_oie_set, tok_vocab, mention_vocab, concept_vocab
+    return train_set, dev_cg_set, dev_oie_set, test_cg_set, test_oie_set, tok_vocab, mention_vocab, concept_vocab
 
 
-def collate_fn_transE(data):
-    hs, rs, ts = zip(*data)
-    h_lens = [len(_) for _ in hs]
-    r_lens = [len(_) for _ in rs]
-    t_lens = [len(_) for _ in ts]
-    h_max_len = max(h_lens)
-    r_max_len = max(r_lens)
-    t_max_len = max(t_lens)
-    h_batch = [pad_sequence_to_length(_, h_max_len, lambda: PAD_idx) for _ in hs]
-    r_batch = [pad_sequence_to_length(_, r_max_len, lambda: PAD_idx) for _ in rs]
-    t_batch = [pad_sequence_to_length(_, t_max_len, lambda: PAD_idx) for _ in ts]
-    return th.LongTensor(h_batch), th.LongTensor(r_batch), th.LongTensor(t_batch), th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens)
+def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTensor:
+    concepts = []
+    cep_lens = []
+    for cep in concept_vocab.keys():
+        cep_num = [tok_vocab.get(_, PAD_idx) for _ in cep.split(' ')]
+        concepts.append(cep_num)
+        cep_lens.append(len(cep_num))
+    max_len = max(cep_lens)
+    concepts = [pad_sequence_to_length(_, max_len, lambda: PAD_idx) for _ in concepts]
+    return th.LongTensor(concepts), th.LongTensor(cep_lens)
 
 
 if __name__ == '__main__':
@@ -169,5 +204,5 @@ if __name__ == '__main__':
     # analysis_concept_token_existence(dataset_dir)
 
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
-    train_set, tok_vocab, mention_vocab, concept_vocab = prepare_ingredients_transE(dataset_dir)
-    # train_iter = data.DataLoader(train_set, collate_fn=collate_fn_transE, batch_size=4, shuffle=True)
+    # train_set, tok_vocab, mention_vocab, concept_vocab = prepare_ingredients_transE(dataset_dir)
+    # train_iter = data.DataLoader(train_set, collate_fn=collate_fn_triples, batch_size=4, shuffle=True)
