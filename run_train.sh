@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG-TransE
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_AttTaxoTransE
+#SBATCH --output=logs/slurm_OpenTransE
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -51,7 +51,36 @@
 
 
 # Jun 22
-python -m scripts.train_att_taxotransE with 'motivation="remove r in attn score"' \
-     'opt.gpu=True' 'opt.checkpoint_dir="checkpoints/AttTaxoTransE"'\
-     'opt.corpus_type="WN18RR"' 'opt.optim_lr=1e-2' \
-     'opt.attn_dim=16' 'opt.loss_margin=3.0'
+# python -m scripts.train_att_taxotransE with 'motivation="remove r in attn score"' \
+#      'opt.gpu=True' 'opt.checkpoint_dir="checkpoints/AttTaxoTransE"'\
+#      'opt.corpus_type="WN18RR"' 'opt.optim_lr=1e-2' \
+#      'opt.attn_dim=16' 'opt.loss_margin=3.0'
+
+# Jul 21
+# python -m scripts.train_opentransE with 'motivation="add grad_norm, batch=512"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+#     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="add grad_norm, batch=512"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
+#     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="add grad_norm, batch=512"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="add grad_norm, batch=512"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'
+
+# Jul 24
+python -m scripts.train_opentransE with 'motivation="GloVe init tok emb"'\
+    'opt.gpu=False' 'opt.dataset_type="SEMedical-OPIEC"'\
+    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+    'opt.optim_lr=3e-4' 'opt.batch_size=512'\
+    'opt.emb_dim=300' 'opt.pretrain_tok_emb="GloVe"'
+# python -m scripts.train_opentransE with 'motivation="Medical +zero_grad"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'

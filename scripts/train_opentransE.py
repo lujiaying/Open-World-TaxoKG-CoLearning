@@ -52,6 +52,8 @@ def my_config():
            'optim_lr': 1e-3,
            'optim_wdecay': 0.5e-4,
            'loss_margin': 3.0,
+           'clip_grad_max_norm': 2.0,
+           'pretrain_tok_emb': ''
            }
 
 
@@ -237,6 +239,9 @@ def main(opt, _run, _log):
               len(mention_vocab), len(rel_vocab), len(concept_vocab)))
     # Build model
     model = OpenTransE(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
+    if opt['pretrain_tok_emb'] != '':
+        model.init_tok_emb_by_pretrain(tok_vocab, opt['pretrain_tok_emb'])
+        _log.info('[%s] model token embedding init by %s' % (time.ctime(), opt['pretrain_tok_emb']))
     model = model.to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     criterion = th.nn.MarginRankingLoss(margin=opt['loss_margin'])
@@ -250,6 +255,7 @@ def main(opt, _run, _log):
         model.train()
         train_loss = []
         for i_batch, (h_batch, r_batch, t_batch, h_lens, r_lens, t_lens) in enumerate(train_iter):
+            optimizer.zero_grad()
             h_batch = h_batch.to(device)
             r_batch = r_batch.to(device)
             t_batch = t_batch.to(device)
@@ -258,6 +264,7 @@ def main(opt, _run, _log):
             loss = criterion(pos_scores, neg_scores, target)
             train_loss.append(loss.item())
             loss.backward()
+            th.nn.utils.clip_grad_norm_(model.parameters(), max_norm=opt['clip_grad_max_norm'], norm_type=2)
             optimizer.step()
         avg_loss = sum(train_loss) / len(train_loss)
         _run.log_scalar("train.loss", avg_loss, i_epoch)

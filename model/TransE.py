@@ -10,6 +10,9 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+import torchtext
+
+PAD_idx = 0
 
 
 class OpenTransE(nn.Module):
@@ -23,7 +26,7 @@ class OpenTransE(nn.Module):
         uniform_range = 6 / (self.emb_dim**0.5)
         self.tok_emb = nn.Embedding(num_embeddings=self.tok_count,
                                     embedding_dim=self.emb_dim,
-                                    padding_idx=0)
+                                    padding_idx=PAD_idx)
         self.tok_emb.weight.data.uniform_(-uniform_range, uniform_range)
         # funcs for tok_emb -> mention_emb, rel_emb
         self.mention_func = nn.LSTM(input_size=self.emb_dim,
@@ -34,6 +37,22 @@ class OpenTransE(nn.Module):
                                 hidden_size=self.emb_dim,
                                 num_layers=self.lstm_layer,
                                 batch_first=True)
+
+    def init_tok_emb_by_pretrain(self, tok_vocab: dict, pretrain_name: str):
+        if pretrain_name == 'GloVe':
+            # emb_dim must in [50, 100, 200, 300]
+            pretrain_vecs = torchtext.vocab.GloVe(name='6B', dim=self.emb_dim)
+        else:
+            print('invalid pretrain_name=%s' % (pretrain_name))
+            exit(-1)
+        with th.no_grad():
+            for tok, idx in tok_vocab.items():
+                if idx == PAD_idx:
+                    continue
+                if tok not in pretrain_vecs.stoi:
+                    continue
+                vec = pretrain_vecs.get_vecs_by_tokens(tok)
+                self.tok_emb.weight[idx] = vec
 
     def _get_composition_emb(self, tok_batch: th.LongTensor, lens: th.LongTensor, func: nn.Module) -> th.Tensor:
         h_embs = self.tok_emb(tok_batch)   # (B, L, emb_dim)
