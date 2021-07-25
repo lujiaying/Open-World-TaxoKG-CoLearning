@@ -378,9 +378,13 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
         return
     random.seed(1105)
     if setting == 'rich':
-        concept_entity_threshold = 40  # >= 40
+        concept_entity_threshold = 40  # freq >= 40
     elif setting == 'limited':
-        concept_entity_threshold = 3   # >= 1
+        concept_entity_threshold = 3   # freq >= 1
+        OLP_rel_freq_threshold = 2
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 2
+        OLP_ment_char_threshold = 3
     else:
         print('invalid arg setting=%s' % (setting))
         exit(-1)
@@ -435,15 +439,40 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     # filter out triples that not align with kept entities
     # split openie triples according to ratio
     kept_lines = []
+    # first round to collect info
+    ment_freq_dict = defaultdict(int)
+    rel_freq_dict = defaultdict(int)
     with open(aligned_openie_path) as fopen:
         for line in fopen:
             line_list = line.strip().split('\t')
             if len(line_list) < 3:
                 continue
             subj, rel, obj = line_list[0], line_list[1], line_list[2]
-            if len(subj) <= 0 or len(rel) <= 0 or len(obj) <= 0:
+            if len(subj) < OLP_ment_char_threshold or len(rel) < OLP_rel_char_threshold \
+                    or len(obj) < OLP_ment_char_threshold:
                 continue
             if subj not in concept_pairs and obj not in concept_pairs:
+                continue
+            ment_freq_dict[subj] += 1
+            ment_freq_dict[obj] += 1
+            rel_freq_dict[rel] += 1
+    ment_freq_dict = {k: v for k, v in ment_freq_dict.items() if v >= OLP_ment_freq_threshold}
+    rel_freq_dict = {k: v for k, v in rel_freq_dict.items() if v >= OLP_rel_freq_threshold}
+    # second round to write
+    with open(aligned_openie_path) as fopen:
+        for line in fopen:
+            line_list = line.strip().split('\t')
+            if len(line_list) < 3:
+                continue
+            subj, rel, obj = line_list[0], line_list[1], line_list[2]
+            if len(subj) < OLP_ment_char_threshold or len(rel) < OLP_rel_char_threshold \
+                    or len(obj) < OLP_ment_char_threshold:
+                continue
+            if subj not in concept_pairs and obj not in concept_pairs:
+                continue
+            if subj not in ment_freq_dict or obj not in ment_freq_dict:
+                continue
+            if rel not in rel_freq_dict:
                 continue
             kept_lines.append('%s\t%s\t%s\n' % (subj, rel, obj))
     total_triple_cnt = len(kept_lines)
@@ -568,10 +597,11 @@ if __name__ == '__main__':
     aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMedical-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
+    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
     aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMusic-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
-    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
     aligned_concept_path = 'data/MSConceptGraph/data-concept-instance-relations.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'

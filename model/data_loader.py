@@ -126,29 +126,77 @@ def cg_pairs_to_cg_triples(concept_pairs: Dict[str, set]) -> List[Tuple[str, str
 def analysis_concept_token_existence(dataset_dir: str):
     print('analysis_concept_token_existence for %s' % (dataset_dir))
     cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
     cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
     # analysis overlapping of concept in train and test set
-    concepts_train = set([c for ceps in load_cg_pairs(cg_train_path).values() for c in ceps])
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    concepts_train = set([c for ceps in cg_pairs_train.values() for c in ceps])
+    concepts_dev = set([c for ceps in load_cg_pairs(cg_dev_path).values() for c in ceps])
     concepts_test = set([c for ceps in load_cg_pairs(cg_test_path).values() for c in ceps])
-    intersc = concepts_train.intersection(concepts_test)
-    print('#train_cep=%d, #test_cep=%d. #%d(%.4f test) in train_cep' % (len(concepts_train), len(concepts_test), len(intersc), len(intersc)/len(concepts_test)))
+    concepts_all = concepts_train.union(concepts_dev).union(concepts_test)
+    intersc = concepts_train.intersection(concepts_all)
+    print('#train_cep=%d, #all_cep=%d. #%d(%.4f all) in train_cep' % (len(concepts_train), len(concepts_all),
+                                                                      len(intersc), len(intersc)/len(concepts_all)))
     # analysis whether all concept tokens have shown in train set (both CG and OKG)
-    concepts_tok_test = set(tok for cep in concepts_test for tok in cep.split(' '))
+    concepts_tok_all = set(tok for cep in concepts_all for tok in cep.split(' '))
     all_tok = set()
-    for cep in concepts_train:
-        for tok in cep.split(' '):
+    for ent, ceps in cg_pairs_train.items():
+        for tok in ent.split(' '):
             all_tok.add(tok)
+        for cep in ceps:
+            for tok in cep.split(' '):
+                all_tok.add(tok)
     oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
     with open(oie_train_path) as fopen:
         for line in fopen:
+            """
             try:
                 subj, rel, obj = line.strip().split('\t')
             except:
                 print(line)
+            """
+            subj, rel, obj = line.strip().split('\t')
             for tok in ('%s %s %s' % (subj, rel, obj)).split(' '):
                 all_tok.add(tok)
-    intersc = all_tok.intersection(concepts_tok_test)
-    print('#all_tok=%d, #test_cep_tok=%d. #%d(%.4f test) in all_tok' % (len(all_tok), len(concepts_tok_test), len(intersc), len(intersc)/len(concepts_tok_test)))
+    intersc = all_tok.intersection(concepts_tok_all)
+    print('#all_tok=%d, #test_cep_tok=%d. #%d(%.4f test) in all_tok' % (len(all_tok), len(concepts_tok_all),
+                                                                        len(intersc), len(intersc)/len(concepts_tok_all)))
+
+
+def analysis_oie_token_existence(dataset_dir: str):
+    print('analysis_oie_token_existence for %s' % (dataset_dir))
+    # mention candidate pool include all mentions from train, dev, test sets
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    mentions_train = set(m for (subj, rel, obj) in oie_triples_train for m in [subj, obj])
+    mentions_dev = set(m for (subj, rel, obj) in oie_triples_dev for m in [subj, obj])
+    mentions_test = set(m for (subj, rel, obj) in oie_triples_test for m in [subj, obj])
+    mentions_all = mentions_train.union(mentions_dev).union(mentions_test)
+    intersc = mentions_train.intersection(mentions_all)
+    print('#train_ment=%d, #all_ment=%d. #%d(%.4f all) in train_ment' % (len(mentions_train), len(mentions_all), len(intersc), len(intersc)/len(mentions_all)))
+    mention_tok_all = set(tok for m in mentions_all for tok in m.split(' '))
+    train_tok_all = set(tok for (subj, rel, obj) in oie_triples_train for tok in (' '.join([subj, rel, obj])).split(' '))
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    for ent, ceps in cg_pairs_train.items():
+        train_tok_all.update(ent.split(' '))
+        for cep in ceps:
+            train_tok_all.update(cep.split(' '))
+    intersc = train_tok_all.intersection(mention_tok_all)
+    print('#train_tok=%d, #all_ment_tok=%d. #%d(%.4f all) in train_tok' % (len(train_tok_all), len(mention_tok_all), len(intersc), len(intersc)/len(mention_tok_all)))
+    # relation analyis: no relation candidate
+    # so only examine test vs train
+    relations_train = set(rel for (subj, rel, obj) in oie_triples_train)
+    relations_test = set(rel for (subj, rel, obj) in oie_triples_test)
+    intersc = relations_train.intersection(relations_test)
+    print('#train_rel=%d, #test_rel=%d. #%d(%.4f test) in train_rel' % (len(relations_train), len(relations_test), len(intersc), len(intersc)/len(relations_test)))
+    relation_tok_test = set(tok for rel in relations_test for tok in rel.split(' '))
+    intersc = relation_tok_test.intersection(train_tok_all)
+    print('#train_tok=%d, #all_rel_tok=%d. #%d(%.4f all) in train_tok' % (len(train_tok_all), len(relation_tok_test), len(intersc), len(intersc)/len(relation_tok_test)))
 
 
 def load_oie_triples(fpath: str) -> List[Tuple[str, str, str]]:
@@ -258,11 +306,14 @@ def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTenso
 
 if __name__ == '__main__':
     dataset_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
+    analysis_oie_token_existence(dataset_dir)
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
+    analysis_oie_token_existence(dataset_dir)
     dataset_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'
     dataset_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
     dataset_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
+    # analysis_oie_token_existence(dataset_dir)
     # analysis_concept_token_existence(dataset_dir)
 
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'

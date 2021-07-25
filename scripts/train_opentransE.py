@@ -233,7 +233,7 @@ def main(opt, _run, _log):
                               batch_size=opt['batch_size']//4, shuffle=False)
     test_oie_iter = DataLoader(test_oie_set, collate_fn=collate_fn_oie_triples,
                                batch_size=opt['batch_size']//4, shuffle=False)
-    _log.info('[%s] Load dataset Done, len=%d(tr), %d,%d(dev), %d,%d(tst)' % (time.ctime(),
+    _log.info('[%s] Load dataset Done, len=%d(tr), %d(CGC-dev)|%d(OLP-dev), %d(CGC-tst)|%d(OLP-tst)' % (time.ctime(),
               len(train_set), len(dev_cg_set), len(dev_oie_set), len(test_cg_set), len(test_oie_set)))
     _log.info('corpus=%s, #Tok=%d, #Mention=%d, #Rel=%d, #Concept=%d' % (opt['dataset_type'], len(tok_vocab),
               len(mention_vocab), len(rel_vocab), len(concept_vocab)))
@@ -248,8 +248,8 @@ def main(opt, _run, _log):
     criterion = criterion.to(device)
     optimizer = th.optim.Adam(model.parameters(), opt['optim_lr'], weight_decay=opt['optim_wdecay'])
 
-    best_CGC_MRR = 0.0
-    best_OLP_MRR = 0.0
+    best_sum_MRR = 0.0
+    w_CGC_MRR = 0.5
     for i_epoch in range(opt['epoch']):
         # do train
         model.train()
@@ -286,9 +286,10 @@ def main(opt, _run, _log):
             _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
             _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
             _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), i_epoch, OLP_MRR, H10, H30, H50))
-            if CGC_MRR >= best_CGC_MRR and OLP_MRR >= best_OLP_MRR:
-                best_CGC_MRR = CGC_MRR
-                best_OLP_MRR = OLP_MRR
+            if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR >= best_sum_MRR:
+                sum_MRR = w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR
+                _log.info('Save best model at eopoch#%d, prev best_sum_MRR=%.3f, cur best_sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)' % (i_epoch, best_sum_MRR, sum_MRR, CGC_MRR, OLP_MRR))
+                best_sum_MRR = sum_MRR
                 save_path = '%s/exp_%s_%s.best.ckpt' % (opt['checkpoint_dir'], _run._id, opt['dataset_type'])
                 th.save(model.state_dict(), save_path)
 
