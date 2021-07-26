@@ -105,6 +105,8 @@ def collate_fn_oie_triples(data: list) -> tuple:
             h_mids, r_rids, t_mids)
 
 
+
+
 def load_cg_pairs(fpath: str) -> Dict[str, set]:
     concept_pairs = dict()   # ent: {cep1, cep2}
     with open(fpath) as fopen:
