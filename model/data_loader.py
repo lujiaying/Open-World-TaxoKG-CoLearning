@@ -7,20 +7,25 @@ import random
 from collections import defaultdict
 from typing import Tuple, Dict, List
 
+import tqdm
 import torch as th
 from torch.utils import data
 from allennlp.common.util import pad_sequence_to_length
+import networkx as nx
+import dgl
 
 PAD_idx = 0
+UNK_idx = PAD_idx+1
+SELF_LOOP = "SELF_LOOP"
 
 
 class CGCOLPTriplesDst(data.Dataset):
     def __init__(self, triples: list, tok_vocab: dict):
         self.triples = []
         for h, r, t in triples:
-            h_num = [tok_vocab.get(_, PAD_idx) for _ in h.split(' ')]
-            r_num = [tok_vocab.get(_, PAD_idx) for _ in r.split(' ')]
-            t_num = [tok_vocab.get(_, PAD_idx) for _ in t.split(' ')]
+            h_num = [tok_vocab.get(_, UNK_idx) for _ in h.split(' ')]
+            r_num = [tok_vocab.get(_, UNK_idx) for _ in r.split(' ')]
+            t_num = [tok_vocab.get(_, UNK_idx) for _ in t.split(' ')]
             self.triples.append((h_num, r_num, t_num))
 
     def __len__(self) -> int:
@@ -104,6 +109,82 @@ def collate_fn_oie_triples(data: list) -> tuple:
             th.LongTensor(h_lens), th.LongTensor(r_lens), th.LongTensor(t_lens),
             h_mids, r_rids, t_mids)
 
+
+class CGCEgoGraphDst(data.Dataset):
+    def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]], tok_vocab: dict):
+        self.graphs = []
+        DG = nx.DiGraph()
+        for subj, rel, obj in oie_triples:
+            DG.add_edge(subj, obj, rel=rel)
+        # add self-loops
+        for n in DG:
+            DG.add_edge(n, n, rel=SELF_LOOP)
+        for ent in cg_pairs:
+            if ent in DG:
+                continue
+            DG.add_edge(ent, ent, rel=SELF_LOOP)
+        for ent, ceps in tqdm.tqdm(cg_pairs.items()):
+            ego_graph = nx.generators.ego.ego_graph(DG, ent, radius=2, undirected=True)
+            cep_tids = [[tok_vocab.get(t, UNK_idx) for t in c.split(' ')] for c in ceps]
+            node_id_map = {ent: 0}  # {mention: nid}
+            edge_tids = []  # [[tid1, tid2, ...], []]
+            u_l = []
+            v_l = []
+            for n in ego_graph.nodes:
+                if n not in node_id_map:
+                    node_id_map[n] = len(node_id_map)
+            for (u, v, rel) in ego_graph.edges.data('rel'):
+                u_l.append(node_id_map[u])
+                v_l.append(node_id_map[v])
+                edge_tids.append([tok_vocab.get(t, UNK_idx) for t in rel.split(' ')])
+            u_l = th.tensor(u_l)
+            v_l = th.tensor(v_l)
+            g = dgl.graph((u_l, v_l))
+            node_tids = [[] for _ in range(len(node_id_map))]
+            for ent, nid in node_id_map.items():
+                node_tids[nid] = [tok_vocab.get(t, UNK_idx) for t in ent.split(' ')]
+            # TODO: cep_tids use target tensor to replace; then BCEWithLogitsLoss can be applied
+            self.graphs.append((g, node_tids, edge_tids, cep_tids))
+
+    def __len__(self) -> int:
+        return len(self.graphs)
+
+    def __getitem__(self, idx: int) -> tuple:
+        return self.graphs[idx]
+
+    @staticmethod
+    def collate_fn(data: list) -> tuple:
+        g_l, node_tids_l, edge_tids_l, cep_tids_l = zip(*data)
+        bg = dgl.batch(g_l)
+        # print('batched graphs batch_size=%s, num of nodes=%s, num of edges=%s' % (bg.batch_size, bg.batch_num_nodes(), bg.batch_num_edges()))
+        # 1D list for all nodes, edges, concepts
+        # node
+        node_tlens = [len(toks) for tids in node_tids_l for toks in tids]
+        max_node_tlen = max(node_tlens)
+        node_toks = [pad_sequence_to_length(toks, max_node_tlen, lambda: PAD_idx)
+                     for tids in node_tids_l for toks in tids]
+        node_toks = th.LongTensor(node_toks)
+        node_tlens = th.LongTensor(node_tlens)
+        # edge
+        edge_tlens = [len(toks) for tids in edge_tids_l for toks in tids]
+        max_edge_tlen = max(edge_tlens)
+        edge_toks = [pad_sequence_to_length(toks, max_edge_tlen, lambda: PAD_idx)
+                     for tids in edge_tids_l for toks in tids]
+        edge_toks = th.LongTensor(edge_toks)
+        edge_tlens = th.LongTensor(edge_tlens)
+        # concept
+        batch_num_concepts = [len(cep_tids) for cep_tids in cep_tids_l]
+        cep_tlens = [len(toks) for tids in cep_tids_l for toks in tids]
+        max_cep_tlen = max(cep_tlens)
+        cep_toks = [pad_sequence_to_length(toks, max_cep_tlen, lambda: PAD_idx)
+                    for tids in cep_tids_l for toks in tids]
+        cep_toks = th.LongTensor(cep_toks)
+        cep_tlens = th.LongTensor(cep_tlens)
+        return bg, node_toks, node_tlens, edge_toks, edge_tlens, cep_toks, cep_tlens, batch_num_concepts
+
+    @staticmethod
+    def sample_neg_concepts(pos_ceps: list, cep_vocab: dict) -> list:
+        pass
 
 
 
@@ -234,7 +315,7 @@ def get_tok_vocab(cg_triples_train: list, oie_triples_train: list) -> Dict[str, 
     """
     Tokens only from train set
     """
-    tok_vocab = {'<PAD>': PAD_idx, '<UNK>': PAD_idx+1}
+    tok_vocab = {'<PAD>': PAD_idx, '<UNK>': UNK_idx}
     for subj, rel, obj in oie_triples_train:
         for tok in (' '.join([subj, rel, obj])).split(' '):
             if tok not in tok_vocab:
@@ -243,6 +324,8 @@ def get_tok_vocab(cg_triples_train: list, oie_triples_train: list) -> Dict[str, 
         for tok in (' '.join([ent, rel, cep])).split(' '):
             if tok not in tok_vocab:
                 tok_vocab[tok] = len(tok_vocab)
+    # add special toks
+    tok_vocab[SELF_LOOP] = len(tok_vocab)
     return tok_vocab
 
 
@@ -298,7 +381,7 @@ def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTenso
     concepts = []
     cep_lens = []
     for cep in concept_vocab.keys():
-        cep_num = [tok_vocab.get(_, PAD_idx) for _ in cep.split(' ')]
+        cep_num = [tok_vocab.get(_, UNK_idx) for _ in cep.split(' ')]
         concepts.append(cep_num)
         cep_lens.append(len(cep_num))
     max_len = max(cep_lens)
@@ -306,11 +389,40 @@ def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTenso
     return th.LongTensor(concepts), th.LongTensor(cep_lens)
 
 
+def prepare_ingredients_TaxoRelGraph(dataset_dir: str) -> tuple:
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    # Load Open KG
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    tok_vocab = get_tok_vocab(cg_pairs_to_cg_triples(cg_pairs_train), oie_triples_train)
+    mention_vocab, rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for OLP filtered eval setting
+    for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        all_triple_ids_map['h'][(mention_vocab[h], rel_vocab[r])].add(mention_vocab[t])
+        all_triple_ids_map['t'][(mention_vocab[t], rel_vocab[r])].add(mention_vocab[h])
+    # create dataset
+    train_CGC_set = CGCEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab)
+    dev_CGC_set = CGCEgoGraphDst(cg_pairs_dev, oie_triples_dev, tok_vocab)
+    test_CGC_set = CGCEgoGraphDst(cg_pairs_test, oie_triples_test, tok_vocab)
+    return (train_CGC_set, dev_CGC_set, test_CGC_set,
+            tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
+
+
 if __name__ == '__main__':
     dataset_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
-    analysis_oie_token_existence(dataset_dir)
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
-    analysis_oie_token_existence(dataset_dir)
     dataset_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'
     dataset_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
