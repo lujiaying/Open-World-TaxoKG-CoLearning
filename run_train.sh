@@ -75,12 +75,17 @@
 #     'opt.optim_lr=3e-4' 'opt.batch_size=512'
 
 # Jul 24
-python -m scripts.train_opentransE with 'motivation="GloVe init tok emb"'\
-    'opt.gpu=False' 'opt.dataset_type="SEMedical-OPIEC"'\
-    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
-    'opt.optim_lr=3e-4' 'opt.batch_size=512'\
-    'opt.emb_dim=300' 'opt.pretrain_tok_emb="GloVe"'
-# python -m scripts.train_opentransE with 'motivation="Medical +zero_grad"'\
+# CUDA_VISIBLE_DEVICES=2 python -m scripts.train_opentransE with 'motivation="GloVe init; weighted sum"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
 #     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
-#     'opt.optim_lr=3e-4' 'opt.batch_size=512'
+#     'opt.optim_lr=3e-4' 'opt.batch_size=512'\
+#     'opt.emb_dim=300' 'opt.pretrain_tok_emb="GloVe"'
+# CUDA_VISIBLE_DEVICES=0 python -m scripts.train_opentransE with 'motivation="GloVe init; weighted sum eval"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512'\
+#    'opt.emb_dim=300' 'opt.pretrain_tok_emb="GloVe"'
+python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
+   'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+   'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+   'opt.optim_lr=3e-4' 'opt.batch_size=512'
