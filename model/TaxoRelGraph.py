@@ -63,17 +63,15 @@ class CompGCN(nn.Module):
         graphs_reverse.update_all(fn.v_sub_e('h', 'h', 'm'),
                                   fn.sum('m', 'hi'))
         h = self.W_O(graphs.ndata['ho']) + self.W_I(graphs_reverse.ndata['hi'])  # (n_cnt, out_dim)
-        # h = F.normalize(F.relu(h), p=self.norm, dim=1)  # (n_cnt, out_dim)
         he = self.W_rel(graphs.edata['h'])   # (e_cnt, out_dim)
         return h, he
 
 
 class TaxoRelCGC(nn.Module):
-    def __init__(self, emb_dim: int, dropout: float, norm: int, g_readout: str):
+    def __init__(self, emb_dim: int, dropout: float, g_readout: str):
         super(TaxoRelCGC, self).__init__()
         self.emb_dim = emb_dim
         self.dropout = nn.Dropout(p=dropout)
-        self.norm = norm
         self.g_readout = g_readout
         self.gnn1 = CompGCN(emb_dim, emb_dim//4)
         self.gnn2 = CompGCN(emb_dim//4, emb_dim)
@@ -95,7 +93,7 @@ class TaxoRelCGC(nn.Module):
         hn = F.relu(hn)
         he = F.relu(he)
         hn, he = self.gnn2(graphs, hn, he)   # (n/e_cnt, emb_d)
-        hn = F.normalize(F.relu(hn), p=self.norm, dim=1)     # (n_cnt, emb_d)
+        hn = F.relu(hn)    # (n_cnt, emb_d)
         graphs.ndata['h'] = hn
         hg = dgl.readout_nodes(graphs, 'h', op=self.g_readout)  # (batch, emb_d)
         cep_embs = self.cep_encoder(cep_embs)        # (all_c_cnt, emb_d)

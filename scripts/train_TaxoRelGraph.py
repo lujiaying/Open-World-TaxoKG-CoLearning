@@ -23,6 +23,8 @@ from utils.metrics import cal_AP_atk, cal_reciprocal_rank
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('TaxoRelGraph')
+ex.observers.append(FileStorageObserver("logs/TaxoRelGraph"))
+ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
 @ex.config
@@ -43,10 +45,9 @@ def my_config():
                },
            'epoch': 500,
            'validate_freq': 10,
-           'batch_size': 8,
+           'batch_size': 16,
            'emb_dim': 256,
            'tok_emb_dropout': 0.2,
-           'cgc_norm': 2,
            'cgc_g_readout': 'mean',
            'optim_lr': 3e-4,
            'optim_wdecay': 0.5e-4,
@@ -123,8 +124,7 @@ def main(opt, _run, _log):
     # Build model
     token_encoder = TokenEncoder(len(tok_vocab), opt['emb_dim'])
     token_encoder = token_encoder.to(device)
-    taxorel_cgc = TaxoRelCGC(opt['emb_dim'], opt['tok_emb_dropout'],
-                             opt['cgc_norm'], opt['cgc_g_readout'])
+    taxorel_cgc = TaxoRelCGC(opt['emb_dim'], opt['tok_emb_dropout'], opt['cgc_g_readout'])
     taxorel_cgc = taxorel_cgc.to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     criterion = th.nn.BCEWithLogitsLoss()
