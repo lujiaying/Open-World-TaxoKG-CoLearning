@@ -111,7 +111,8 @@ def collate_fn_oie_triples(data: list) -> tuple:
 
 
 class CGCEgoGraphDst(data.Dataset):
-    def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]], tok_vocab: dict):
+    def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]],
+                 tok_vocab: dict, cep_vocab: dict):
         self.graphs = []
         DG = nx.DiGraph()
         for subj, rel, obj in oie_triples:
@@ -125,7 +126,10 @@ class CGCEgoGraphDst(data.Dataset):
             DG.add_edge(ent, ent, rel=SELF_LOOP)
         for ent, ceps in tqdm.tqdm(cg_pairs.items()):
             ego_graph = nx.generators.ego.ego_graph(DG, ent, radius=2, undirected=True)
-            cep_tids = [[tok_vocab.get(t, UNK_idx) for t in c.split(' ')] for c in ceps]
+            # cep_tids = [[tok_vocab.get(t, UNK_idx) for t in c.split(' ')] for c in ceps]
+            cep_vec = [0.0 for idx in range(len(cep_vocab))]
+            for c in ceps:
+                cep_vec[cep_vocab[c]] = 1.0
             node_id_map = {ent: 0}  # {mention: nid}
             edge_tids = []  # [[tid1, tid2, ...], []]
             u_l = []
@@ -143,8 +147,7 @@ class CGCEgoGraphDst(data.Dataset):
             node_tids = [[] for _ in range(len(node_id_map))]
             for ent, nid in node_id_map.items():
                 node_tids[nid] = [tok_vocab.get(t, UNK_idx) for t in ent.split(' ')]
-            # TODO: cep_tids use target tensor to replace; then BCEWithLogitsLoss can be applied
-            self.graphs.append((g, node_tids, edge_tids, cep_tids))
+            self.graphs.append((g, node_tids, edge_tids, cep_vec))
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -154,7 +157,7 @@ class CGCEgoGraphDst(data.Dataset):
 
     @staticmethod
     def collate_fn(data: list) -> tuple:
-        g_l, node_tids_l, edge_tids_l, cep_tids_l = zip(*data)
+        g_l, node_tids_l, edge_tids_l, cep_vec_l = zip(*data)
         bg = dgl.batch(g_l)
         # print('batched graphs batch_size=%s, num of nodes=%s, num of edges=%s' % (bg.batch_size, bg.batch_num_nodes(), bg.batch_num_edges()))
         # 1D list for all nodes, edges, concepts
@@ -172,20 +175,9 @@ class CGCEgoGraphDst(data.Dataset):
                      for tids in edge_tids_l for toks in tids]
         edge_toks = th.LongTensor(edge_toks)
         edge_tlens = th.LongTensor(edge_tlens)
-        # concept
-        batch_num_concepts = [len(cep_tids) for cep_tids in cep_tids_l]
-        cep_tlens = [len(toks) for tids in cep_tids_l for toks in tids]
-        max_cep_tlen = max(cep_tlens)
-        cep_toks = [pad_sequence_to_length(toks, max_cep_tlen, lambda: PAD_idx)
-                    for tids in cep_tids_l for toks in tids]
-        cep_toks = th.LongTensor(cep_toks)
-        cep_tlens = th.LongTensor(cep_tlens)
-        return bg, node_toks, node_tlens, edge_toks, edge_tlens, cep_toks, cep_tlens, batch_num_concepts
-
-    @staticmethod
-    def sample_neg_concepts(pos_ceps: list, cep_vocab: dict) -> list:
-        pass
-
+        # concept as target vector
+        cep_vec_l = th.FloatTensor(cep_vec_l)   # (B, cep_cnt)
+        return bg, node_toks, node_tlens, edge_toks, edge_tlens, cep_vec_l
 
 
 def load_cg_pairs(fpath: str) -> Dict[str, set]:
@@ -413,9 +405,9 @@ def prepare_ingredients_TaxoRelGraph(dataset_dir: str) -> tuple:
         all_triple_ids_map['h'][(mention_vocab[h], rel_vocab[r])].add(mention_vocab[t])
         all_triple_ids_map['t'][(mention_vocab[t], rel_vocab[r])].add(mention_vocab[h])
     # create dataset
-    train_CGC_set = CGCEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab)
-    dev_CGC_set = CGCEgoGraphDst(cg_pairs_dev, oie_triples_dev, tok_vocab)
-    test_CGC_set = CGCEgoGraphDst(cg_pairs_test, oie_triples_test, tok_vocab)
+    train_CGC_set = CGCEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab, concept_vocab)
+    dev_CGC_set = CGCEgoGraphDst(cg_pairs_dev, oie_triples_dev, tok_vocab, concept_vocab)
+    test_CGC_set = CGCEgoGraphDst(cg_pairs_test, oie_triples_test, tok_vocab, concept_vocab)
     return (train_CGC_set, dev_CGC_set, test_CGC_set,
             tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
 

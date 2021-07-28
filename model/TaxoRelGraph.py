@@ -73,6 +73,8 @@ class TaxoRelCGC(nn.Module):
         super(TaxoRelCGC, self).__init__()
         self.emb_dim = emb_dim
         self.dropout = nn.Dropout(p=dropout)
+        self.norm = norm
+        self.g_readout = g_readout
         self.gnn1 = CompGCN(emb_dim, emb_dim//4)
         self.gnn2 = CompGCN(emb_dim//4, emb_dim)
         self.cep_encoder = nn.Sequential(
@@ -81,10 +83,21 @@ class TaxoRelCGC(nn.Module):
                 )
 
     def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor, cep_embs: th.Tensor):
+        """
+        Args:
+            node_embs: (n_cnt, emb_d)
+            edge_embs: (e_cnt, emb_d)
+            cep_embs:  (all_c_cnt, emb_d)
+        """
         node_embs = self.dropout(node_embs)
         edge_embs = self.dropout(edge_embs)
-        hn, he = F.relu(self.gnn1(graphs, node_embs, edge_embs))
-        hn, he = F.relu(self.gnn2(graphs, hn, he))   # (n/e_cnt, emb_d)
-        hn = F.normalize(hn, p=self.norm, dim=1)     # (n_cnt, emb_d)
+        hn, he = self.gnn1(graphs, node_embs, edge_embs)
+        hn = F.relu(hn)
+        he = F.relu(he)
+        hn, he = self.gnn2(graphs, hn, he)   # (n/e_cnt, emb_d)
+        hn = F.normalize(F.relu(hn), p=self.norm, dim=1)     # (n_cnt, emb_d)
         graphs.ndata['h'] = hn
-        hg = dgl.readout_nodes(bg, 'h', op=g_readout)  # (batch, emb_d)
+        hg = dgl.readout_nodes(graphs, 'h', op=self.g_readout)  # (batch, emb_d)
+        cep_embs = self.cep_encoder(cep_embs)        # (all_c_cnt, emb_d)
+        logits = th.matmul(hg, cep_embs.transpose(0, 1))   # (batch, all_c_cnt)
+        return logits
