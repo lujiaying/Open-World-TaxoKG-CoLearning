@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=TaxoKG-TransE
+#SBATCH --job-name=TaxoKG-OwnModel
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_OpenTransE
+#SBATCH --output=logs/slurm_TaxoRelGraph
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -85,7 +85,19 @@
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512'\
 #    'opt.emb_dim=300' 'opt.pretrain_tok_emb="GloVe"'
-python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
-   'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
-   'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
-   'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512'
+
+# Jul 28
+# python -m scripts.train_TaxoRelGraph with 'motivation="default with u_sub_e instead of v_sub_e"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
+python -m scripts.train_TaxoRelGraph with 'motivation="OLP only model trial run"'\
+    'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+    'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'

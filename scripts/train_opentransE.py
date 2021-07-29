@@ -19,7 +19,7 @@ from neptunecontrib.monitoring.sacred import NeptuneObserver
 from model.data_loader import prepare_ingredients_transE, get_concept_tok_tensor
 from model.data_loader import collate_fn_triples, collate_fn_CGCpairs, collate_fn_oie_triples
 from model.TransE import OpenTransE
-from utils.metrics import cal_AP_atk, cal_reciprocal_rank
+from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('base-OpenTransE')
@@ -114,57 +114,7 @@ def test_CGC_task(model: th.nn.Module, cg_iter: DataLoader, tok_vocab: dict,
     return MAP, MRR, P1, P3, P10
 
 
-def cal_OLG_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
-                    is_tail_preds: bool, all_oie_triples_map: dict) -> tuple:
-    # adujst pred score for filtered setting
-    preds_to_ignore = preds.new_zeros(preds.size())  # non-zero entries for existing triples
-    for i in range(preds.size(0)):
-        h, r, t = h_mids[i], r_rids[i], t_mids[i]
-        if is_tail_preds is True:
-            ents_to_ignore = list(all_oie_triples_map['h'][(h, r)])
-            if t in ents_to_ignore:
-                ents_to_ignore.remove(t)
-        else:
-            ents_to_ignore = list(all_oie_triples_map['t'][(t, r)])
-            if h in ents_to_ignore:
-                ents_to_ignore.remove(h)
-    preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
-    preds_idx = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
-    # cal metrics
-    """
-    # GPU: cost 0.2s
-    MRR = []
-    Hits10 = []
-    Hits30 = []
-    Hits50 = []
-    for i in range(preds_idx.size(0)):
-        gold = [t_mids[i]] if is_tail_preds else [h_mids[i]]
-        pred_idx = preds_idx[i].tolist()
-        RR = cal_reciprocal_rank(gold, pred_idx)
-        MRR.append(RR)
-        gold = set(gold)
-        H10 = 1.0 if len(gold.intersection(set(pred_idx[:10]))) > 0 else 0.0
-        H30 = 1.0 if len(gold.intersection(set(pred_idx[:30]))) > 0 else 0.0
-        H50 = 1.0 if len(gold.intersection(set(pred_idx[:50]))) > 0 else 0.0
-        Hits10.append(H10)
-        Hits30.append(H30)
-        Hits50.append(H50)
-    """
-    # GPU: cost 0.04s
-    if is_tail_preds is True:
-        ground_truth = preds.new_tensor(t_mids, dtype=th.long).reshape(-1, 1)  # (B,1)
-    else:
-        ground_truth = preds.new_tensor(h_mids, dtype=th.long).reshape(-1, 1)  # (B,1)
-    zero_tensor = ground_truth.new_tensor([0])
-    one_tensor = ground_truth.new_tensor([1])
-    Hits10 = th.where(preds_idx[:, :10] == ground_truth, one_tensor, zero_tensor).sum().item()
-    Hits30 = th.where(preds_idx[:, :30] == ground_truth, one_tensor, zero_tensor).sum().item()
-    Hits50 = th.where(preds_idx[:, :50] == ground_truth, one_tensor, zero_tensor).sum().item()
-    MRR = (1.0 / (preds_idx == ground_truth).nonzero(as_tuple=False)[:, 1].float().add(1.0)).sum().item()
-    return MRR, Hits10, Hits30, Hits50
-
-
-def test_OLG_task(model: th.nn.Module, oie_iter: DataLoader, tok_vocab: dict,
+def test_OLP_task(model: th.nn.Module, oie_iter: DataLoader, tok_vocab: dict,
                   mention_vocab: dict, rel_vocab: dict, device: th.device,
                   all_oie_triples_map: dict) -> tuple:
     all_mentions, all_mention_lens = get_concept_tok_tensor(mention_vocab, tok_vocab)
@@ -184,14 +134,14 @@ def test_OLG_task(model: th.nn.Module, oie_iter: DataLoader, tok_vocab: dict,
             r_batch = r_batch.to(device)
             t_batch = t_batch.to(device)
             pred_tails = model.test_tail_pred(h_batch, r_batch, all_mention_embs, h_lens, r_lens)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLG_metrics(pred_tails, h_mids, r_rids, t_mids, True, all_oie_triples_map)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, h_mids, r_rids, t_mids, True, all_oie_triples_map)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
             Hits50 += H50_b
             # head pred
             pred_heads = model.test_head_pred(t_batch, r_batch, all_mention_embs, t_lens, r_lens)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLG_metrics(pred_heads, h_mids, r_rids, t_mids, False, all_oie_triples_map)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, h_mids, r_rids, t_mids, False, all_oie_triples_map)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
@@ -279,7 +229,7 @@ def main(opt, _run, _log):
             _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
             _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
             _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), i_epoch, MAP, CGC_MRR, P1, P3, P10))
-            OLP_MRR, H10, H30, H50 = test_OLG_task(model, dev_oie_iter, tok_vocab, mention_vocab,
+            OLP_MRR, H10, H30, H50 = test_OLP_task(model, dev_oie_iter, tok_vocab, mention_vocab,
                                                    rel_vocab, device, all_oie_triples_map)
             _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
             _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
@@ -305,7 +255,7 @@ def main(opt, _run, _log):
     _run.log_scalar("test.CGC.P@3", P3)
     _run.log_scalar("test.CGC.P@10", P10)
     _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
-    OLP_MRR, H10, H30, H50 = test_OLG_task(model, test_oie_iter, tok_vocab, mention_vocab,
+    OLP_MRR, H10, H30, H50 = test_OLP_task(model, test_oie_iter, tok_vocab, mention_vocab,
                                            rel_vocab, device, all_oie_triples_map)
     _run.log_scalar("test.OLP.MRR", OLP_MRR)
     _run.log_scalar("test.OLP.Hits@10", H10)
