@@ -73,7 +73,7 @@ class CompGCN(nn.Module):
                               fn.mean('m', 'ho'))
             graphs_reverse.update_all(fn.copy_u('h', 'm'),
                                       fn.mean('m', 'hi'))
-        h = self.W_O(graphs.ndata['ho']) + self.W_I(graphs_reverse.ndata['hi'])  # (n_cnt, out_dim)
+        h = 1/2 * self.W_O(graphs.ndata['ho']) + 1/2 * self.W_I(graphs_reverse.ndata['hi'])  # (n_cnt, out_dim)
         if self.is_semantic_edge:
             he = self.W_rel(graphs.edata['h'])   # (e_cnt, out_dim)
         else:
@@ -137,7 +137,12 @@ class TaxoRelOLP(nn.Module):
         hn, _ = self.gnn2(bg, hn, _)
         hn = F.relu(hn)
         bg.ndata['h'] = hn
-        hg = dgl.readout_nodes(bg, 'h', op=self.g_readout)  # (batch, emb_d)
+        if self.g_readout == 'central_node':
+            g_node_cnts = bg.batch_num_nodes()   # (B, )
+            central_nids = [0] + g_node_cnts.cumsum(dim=0).tolist()[:-1]
+            hg = hn[central_nids]
+        else:
+            hg = dgl.readout_nodes(bg, 'h', op=self.g_readout)  # (batch, emb_d)
         return hg
 
     def _sample_batch_negative_triples(self, h_embs: th.Tensor, t_embs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:

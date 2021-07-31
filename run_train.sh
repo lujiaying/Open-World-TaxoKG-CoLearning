@@ -98,6 +98,12 @@
 # python -m scripts.train_TaxoRelGraph with 'motivation="default with u_sub_e instead of v_sub_e"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
 #     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
-python -m scripts.train_TaxoRelGraph with 'motivation="OLP only model trial run"'\
+# python -m scripts.train_TaxoRelGraph with 'motivation="MTL default params run"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
+
+# Jul 31
+python -m scripts.train_TaxoRelGraph with 'motivation="OLP use central_node as readout"'\
     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
-    'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
+    'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'\
+    'opt.olp_g_readout="central_node"'
