@@ -23,8 +23,8 @@ from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('TaxoRelGraph')
-ex.observers.append(FileStorageObserver("logs/TaxoRelGraph"))
-ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
+# ex.observers.append(FileStorageObserver("logs/TaxoRelGraph"))
+# ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
 @ex.config
@@ -219,7 +219,11 @@ def main(opt, _run, _log):
     dev_OLP_iter = DataLoader(dev_OLP_set, collate_fn=OLPEgoGraphDst.collate_fn,
                               batch_size=opt['OLP_batch_size'], shuffle=False)
     test_OLP_iter = DataLoader(test_OLP_set, collate_fn=OLPEgoGraphDst.collate_fn,
-                                batch_size=opt['OLP_batch_size'], shuffle=False)
+                               batch_size=opt['OLP_batch_size'], shuffle=False)
+    _log.info('Train CGC ego graph avg #node=%.2f, #edge=%.2f' % (train_CGC_set.avg_node_cnt,
+              train_CGC_set.avg_edge_cnt))
+    _log.info('Train OLP ego graph avg #node=%.2f, #edge=%.2f' % (train_OLP_set.avg_node_cnt,
+              train_OLP_set.avg_edge_cnt))
     # Build model
     token_encoder = TokenEncoder(len(tok_vocab), opt['emb_dim'])
     token_encoder = token_encoder.to(device)
@@ -233,8 +237,10 @@ def main(opt, _run, _log):
     CGC_criterion = CGC_criterion.to(device)
     OLP_criterion = th.nn.MarginRankingLoss(margin=opt['OLP_loss_margin'])
     OLP_criterion = OLP_criterion.to(device)
-    params = list(token_encoder.parameters()) + list(taxorel_cgc.parameters()) + list(taxorel_olp.parameters())
-    optimizer = th.optim.Adam(params, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    params_CGC = list(token_encoder.parameters()) + list(taxorel_cgc.parameters())
+    params_OLP = list(token_encoder.parameters()) + list(taxorel_olp.parameters())
+    optimizer_CGC = th.optim.Adam(params_CGC, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    optimizer_OLP = th.optim.Adam(params_OLP, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
 
     all_cep_toks, all_cep_tok_lens = get_concept_tok_tensor(concept_vocab, tok_vocab)
     all_cep_toks = all_cep_toks.to(device)
@@ -252,7 +258,7 @@ def main(opt, _run, _log):
                       rel_toks, rel_tlens,
                       obj_bg, obj_node_toks, obj_node_tlens,
                       triple_batch) in enumerate(train_OLP_iter):
-            optimizer.zero_grad()
+            optimizer_OLP.zero_grad()
             subj_bg = subj_bg.to(device)
             subj_node_toks = subj_node_toks.to(device)
             subj_node_tlens = subj_node_tlens.to(device)
@@ -261,24 +267,31 @@ def main(opt, _run, _log):
             obj_node_tlens = obj_node_tlens.to(device)
             rel_toks = rel_toks.to(device)
             rel_tlens = rel_tlens.to(device)
+            tic = time.perf_counter()
             subj_node_embs = token_encoder(subj_node_toks, subj_node_tlens)
             obj_node_embs = token_encoder(obj_node_toks, obj_node_tlens)
             rel_embs = token_encoder(rel_toks, rel_tlens)
+            toc = time.perf_counter()
+            _log.info('token encoder elapsed time %.3f' % (toc-tic))
+            tic = time.perf_counter()
             pos_scores, neg_scores = taxorel_olp(subj_bg, subj_node_embs, rel_embs,
                                                  obj_bg, obj_node_embs)
+            toc = time.perf_counter()
+            _log.info('taxorel_olp elapsed time %.3f' % (toc-tic))
+            if i_batch >= 1:
+                exit(0)  # debug
             target = pos_scores.new_tensor([-1])
             loss = OLP_criterion(pos_scores, neg_scores, target)
             train_OLP_loss.append(loss.item())
             loss.backward()
-            optimizer.step()
+            optimizer_OLP.step()
         avg_loss = sum(train_OLP_loss) / len(train_OLP_loss)
         _run.log_scalar("train.OLP.loss", avg_loss, i_epoch)
         _log.info('[%s] epoch#%d train Done, avg OLP loss=%.5f' % (time.ctime(), i_epoch, avg_loss))
-        """
         # TODO: MTL debug
         for i_batch, (bg, node_toks, node_tlens, edge_toks, edge_tlens,
                       cep_targets) in enumerate(train_CGC_iter):
-            optimizer.zero_grad()
+            optimizer_CGC.zero_grad()
             node_toks = node_toks.to(device)
             node_tlens = node_tlens.to(device)
             edge_toks = edge_toks.to(device)
@@ -293,17 +306,15 @@ def main(opt, _run, _log):
             loss = CGC_criterion(logits, cep_targets)
             train_CGC_loss.append(loss.item())
             loss.backward()
-            optimizer.step()
+            optimizer_CGC.step()
         avg_loss = sum(train_CGC_loss) / len(train_CGC_loss)
         _run.log_scalar("train.CGC.loss", avg_loss, i_epoch)
         _log.info('[%s] epoch#%d train Done, avg CGC loss=%.5f' % (time.ctime(), i_epoch, avg_loss))
-        """
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
             token_encoder.eval()
             taxorel_cgc.eval()
             taxorel_olp.eval()
-            """
             MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(token_encoder, taxorel_cgc, dev_CGC_iter,
                                                       all_cep_toks, all_cep_tok_lens, device)
             _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
@@ -313,8 +324,7 @@ def main(opt, _run, _log):
             _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
             _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(),
                       i_epoch, MAP, CGC_MRR, P1, P3, P10))
-            """
-            CGC_MRR = 0.0   # TODO: MTL debug
+            # CGC_MRR = 0.0   # TODO: MTL debug
             OLP_MRR, H10, H30, H50 = test_OLP_task(token_encoder, taxorel_olp, train_OLP_iter,
                                                    dev_OLP_iter, test_OLP_iter, mention_vocab,
                                                    all_oie_triples_map, device, is_dev=True)
@@ -346,7 +356,6 @@ def main(opt, _run, _log):
     token_encoder.eval()
     taxorel_cgc.eval()
     taxorel_olp.eval()
-    """
     MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(token_encoder, taxorel_cgc, test_CGC_iter,
                                               all_cep_toks, all_cep_tok_lens, device)
     _run.log_scalar("test.CGC.MAP", MAP)
@@ -355,7 +364,6 @@ def main(opt, _run, _log):
     _run.log_scalar("test.CGC.P@3", P3)
     _run.log_scalar("test.CGC.P@10", P10)
     _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
-    """
     OLP_MRR, H10, H30, H50 = test_OLP_task(token_encoder, taxorel_olp, train_OLP_iter,
                                            dev_OLP_iter, test_OLP_iter, mention_vocab,
                                            all_oie_triples_map, device, is_dev=False)

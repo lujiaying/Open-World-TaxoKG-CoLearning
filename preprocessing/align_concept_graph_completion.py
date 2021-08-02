@@ -371,15 +371,36 @@ def store_filtered_ConceptPairs_ReVerb(CM_path: str, CM_type: str, ReVerb_path: 
 
 def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
                          out_dir: str, setting: str = 'rich'):
+    def downsample_ent_cep_pairs(pairs: dict, percent: float = 0.20) -> dict:
+        cnt = len(pairs)
+        samples = random.sample(list(pairs.items()), k=round(cnt*percent))
+        return {k: v for (k, v) in samples}
+
     def _write_concept_pairs_to_file(concept_pairs: Dict[str, set], out_path: str):
         with open(out_path, 'w') as fwrite:
             for c, ps in concept_pairs.items():
                 fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
         return
     random.seed(1105)
-    if setting == 'rich':
+    if setting == 'rich-ReVerb':
         concept_entity_threshold = 40  # freq >= 40
-    elif setting == 'limited':
+        OLP_rel_freq_threshold = 35
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 50
+        OLP_ment_char_threshold = 3
+    elif setting == 'rich-OPIEC':
+        concept_entity_threshold = 40  # freq >= 40
+        OLP_rel_freq_threshold = 25
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 40
+        OLP_ment_char_threshold = 3
+    elif setting == 'SEMusic':
+        concept_entity_threshold = 3   # freq >= 1
+        OLP_rel_freq_threshold = 3
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 4
+        OLP_ment_char_threshold = 3
+    elif setting == 'SEMedical':
         concept_entity_threshold = 3   # freq >= 1
         OLP_rel_freq_threshold = 2
         OLP_rel_char_threshold = 2
@@ -398,6 +419,11 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     for p, cs in reverse_concept_pairs.items():
         if len(cs) >= concept_entity_threshold:
             kept_concepts.add(p)
+    if setting.startswith('rich'):
+        # downsample concepts
+        kept_cnt = round(len(kept_concepts) * 0.2)
+        kept_concepts = random.sample(list(kept_concepts), k=kept_cnt)
+        kept_concepts = set(kept_concepts)
     concept_pairs = defaultdict(set)   # c: {parent1, parent2}
     for c, ps in all_concept_pairs.items():
         kept_ps = set()
@@ -423,6 +449,17 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
             test_concept_pairs[ent] = concept_pairs[ent]
         else:
             dev_concept_pairs[ent] = concept_pairs[ent]
+    # for resource-rich setting, futher down-sample
+    if setting.startswith('rich'):
+        # keep 20% entities
+        train_concept_pairs = downsample_ent_cep_pairs(train_concept_pairs)
+        dev_concept_pairs = downsample_ent_cep_pairs(dev_concept_pairs)
+        test_concept_pairs = downsample_ent_cep_pairs(test_concept_pairs)
+        # update concept_pairs
+        concept_pairs = {}
+        concept_pairs.update(train_concept_pairs)
+        concept_pairs.update(dev_concept_pairs)
+        concept_pairs.update(test_concept_pairs)
     print('CG - train set')
     analysis_concept_pairs(train_concept_pairs, False)
     print('CG - dev set')
@@ -597,24 +634,24 @@ if __name__ == '__main__':
     aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMedical-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
-    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'SEMedical')
     aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.SemEvalMusic-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
-    split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'SEMusic')
     aligned_concept_path = 'data/MSConceptGraph/data-concept-instance-relations.ReVerb-aligned.txt'
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'
-    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich-ReVerb')
     aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.OPIEC-aligned.txt'
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMedical-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
-    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'SEMedical')
     aligned_concept_path = 'data/SemEval2018-Task9/2B.music.merged_pairs.OPIEC-aligned.txt'
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMusic-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
-    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'limited')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'SEMusic')
     aligned_concept_path = 'data/MSConceptGraph/instance-concepts.OPIEC-aligned.txt'
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
-    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich')
+    # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich-OPIEC')

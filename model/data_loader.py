@@ -158,7 +158,9 @@ class CGCEgoGraphDst(data.Dataset):
             for ent, nid in node_id_map.items():
                 node_tids[nid] = [tok_vocab.get(t, UNK_idx) for t in ent.split(' ')]
             self.graphs.append((g, node_tids, edge_tids, cep_vec))
-        print('CGC EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
+        # print('CGC EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
+        self.avg_node_cnt = sum(eg_nodes) / len(eg_nodes)
+        self.avg_edge_cnt = sum(eg_edges) / len(eg_edges)
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -225,7 +227,9 @@ class OLPEgoGraphDst(data.Dataset):
             rel_tids = [tok_vocab.get(t, UNK_idx) for t in rel.split(' ')]
             triple = (mention_vocab[subj], rel_vocab[rel], mention_vocab[obj])
             self.graphs.append((subj_g, subj_node_tids, rel_tids, obj_g, obj_node_tids, triple))
-        print('CGC EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
+        # print('OLP EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
+        self.avg_node_cnt = sum(eg_nodes) / len(eg_nodes)
+        self.avg_edge_cnt = sum(eg_edges) / len(eg_edges)
 
     @staticmethod
     def networkx_to_dgl_graph(eg: nx.DiGraph, ego_ent: str, tok_vocab: dict) -> Tuple[dgl.graph, List[List[str]]]:
