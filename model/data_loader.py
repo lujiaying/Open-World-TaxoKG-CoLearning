@@ -116,24 +116,18 @@ class CGCEgoGraphDst(data.Dataset):
                surrounding by 2-hop relational triples
     """
     def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]],
-                 tok_vocab: dict, cep_vocab: dict):
+                 tok_vocab: dict, cep_vocab: dict, max_len: int):
         self.graphs = []
-        # the whole big graph from open KG
-        DG = nx.DiGraph()
+        subj_oie_dict = defaultdict(set)
+        obj_oie_dict = defaultdict(set)
         for subj, rel, obj in oie_triples:
-            DG.add_edge(subj, obj, rel=rel)
-        # add self-loops
-        for n in DG:
-            DG.add_edge(n, n, rel=SELF_LOOP)
-        for ent in cg_pairs:
-            if ent in DG:
-                continue
-            DG.add_edge(ent, ent, rel=SELF_LOOP)
+            subj_oie_dict[subj].add((rel, obj))
+            obj_oie_dict[obj].add((rel, subj))
         # build one graph for each ent
         eg_nodes = []
         eg_edges = []
         for ent, ceps in tqdm.tqdm(cg_pairs.items()):
-            ego_graph = nx.generators.ego.ego_graph(DG, ent, radius=2, undirected=True)
+            ego_graph = CGCEgoGraphDst.create_2hop_ego_graph(ent, subj_oie_dict, obj_oie_dict)
             eg_nodes.append(ego_graph.number_of_nodes())
             eg_edges.append(ego_graph.number_of_edges())
             # cep_tids = [[tok_vocab.get(t, UNK_idx) for t in c.split(' ')] for c in ceps]
@@ -157,10 +151,44 @@ class CGCEgoGraphDst(data.Dataset):
             node_tids = [[] for _ in range(len(node_id_map))]
             for ent, nid in node_id_map.items():
                 node_tids[nid] = [tok_vocab.get(t, UNK_idx) for t in ent.split(' ')]
-            self.graphs.append((g, node_tids, edge_tids, cep_vec))
-        # print('CGC EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
+            node_toks, node_tlens = CGCEgoGraphDst.tids_list_to_tensor(node_tids, max_len)
+            edge_toks, edge_tlens = CGCEgoGraphDst.tids_list_to_tensor(edge_tids, max_len)
+            # self.graphs.append((g, node_tids, edge_tids, cep_vec))
+            self.graphs.append((g, node_toks, node_tlens, edge_toks, edge_tlens, cep_vec))
         self.avg_node_cnt = sum(eg_nodes) / len(eg_nodes)
         self.avg_edge_cnt = sum(eg_edges) / len(eg_edges)
+
+    @staticmethod
+    def create_2hop_ego_graph(ent: str, subj_oie_dict: dict, obj_oie_dict: dict) -> nx.DiGraph():
+        DG = nx.DiGraph()
+        edges = set()
+        # one-hop neighbours
+        one_hop_neighs = set()
+        if ent in subj_oie_dict:
+            for (r, o) in subj_oie_dict[ent]:
+                one_hop_neighs.add(o)
+                edges.add((ent, r, o))
+        if ent in obj_oie_dict:
+            for (r, s) in obj_oie_dict[ent]:
+                one_hop_neighs.add(s)
+                edges.add((s, r, ent))
+        # two-hop neighbours
+        for neigh in one_hop_neighs:
+            if neigh in subj_oie_dict:
+                for (r, o) in subj_oie_dict[neigh]:
+                    edges.add((neigh, r, o))
+            if neigh in obj_oie_dict:
+                for (r, s) in obj_oie_dict[neigh]:
+                    edges.add((s, r, neigh))
+        if len(edges) > 0:
+            for (s, r, o) in edges:
+                DG.add_edge(s, o, rel=r)
+        else:
+            DG.add_node(ent)
+        # add self loop
+        for n in DG:
+            DG.add_edge(n, n, rel=SELF_LOOP)
+        return DG
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -169,25 +197,24 @@ class CGCEgoGraphDst(data.Dataset):
         return self.graphs[idx]
 
     @staticmethod
+    def tids_list_to_tensor(tids: list, max_len: int) -> Tuple[th.tensor, list]:
+        # tids: 2D list
+        tlens = [min(len(tid), max_len) for tid in tids]
+        tids_tensor = [pad_sequence_to_length(tid, max_len, lambda: PAD_idx)
+                       for tid in tids]
+        return th.LongTensor(tids_tensor), tlens
+
+    @staticmethod
     def collate_fn(data: list) -> tuple:
-        g_l, node_tids_l, edge_tids_l, cep_vec_l = zip(*data)
+        g_l, node_toks_l, node_tlens_l, edge_toks_l, edge_tlens_l, cep_vec_l = zip(*data)
         bg = dgl.batch(g_l)
-        # print('batched graphs batch_size=%s, num of nodes=%s, num of edges=%s' % (bg.batch_size, bg.batch_num_nodes(), bg.batch_num_edges()))
         # 1D list for all nodes, edges, concepts
         # node
-        node_tlens = [len(toks) for tids in node_tids_l for toks in tids]
-        max_node_tlen = max(node_tlens)
-        node_toks = [pad_sequence_to_length(toks, max_node_tlen, lambda: PAD_idx)
-                     for tids in node_tids_l for toks in tids]
-        node_toks = th.LongTensor(node_toks)
-        node_tlens = th.LongTensor(node_tlens)
+        node_toks = th.cat(node_toks_l, 0)   # (n_cnt, max_l)
+        node_tlens = th.LongTensor([tl for tlens in node_tlens_l for tl in tlens])  # (n_cnt, )
         # edge
-        edge_tlens = [len(toks) for tids in edge_tids_l for toks in tids]
-        max_edge_tlen = max(edge_tlens)
-        edge_toks = [pad_sequence_to_length(toks, max_edge_tlen, lambda: PAD_idx)
-                     for tids in edge_tids_l for toks in tids]
-        edge_toks = th.LongTensor(edge_toks)
-        edge_tlens = th.LongTensor(edge_tlens)
+        edge_toks = th.cat(edge_toks_l, 0)   # (n_cnt, max_l)
+        edge_tlens = th.LongTensor([tl for tlens in edge_tlens_l for tl in tlens])  # (e_cnt, )
         # concept as target vector
         cep_vec_l = th.FloatTensor(cep_vec_l)   # (B, cep_cnt)
         return bg, node_toks, node_tlens, edge_toks, edge_tlens, cep_vec_l
@@ -199,37 +226,65 @@ class OLPEgoGraphDst(data.Dataset):
                surrounding by 2-hop taxonomy entities/concepts
     """
     def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]],
-                 tok_vocab: dict, mention_vocab: dict, rel_vocab: dict):
+                 tok_vocab: dict, mention_vocab: dict, rel_vocab: dict, max_len: int):
         self.graphs = []
-        # the whole big graph from concept graph
-        DG = nx.DiGraph()
-        for ent, ceps in cg_pairs.items():
-            for cep in ceps:
-                DG.add_edge(ent, cep)
-        # add self-loops
-        for subj, rel, obj in oie_triples:
-            if subj not in DG:
-                DG.add_edge(subj, subj)
-            if obj not in DG:
-                DG.add_edge(obj, obj)
-        # build graphs for each subj, obj
         eg_nodes = []
         eg_edges = []
+        reverse_cg_pairs = defaultdict(set)
+        for c, ps in cg_pairs.items():
+            for p in ps:
+                reverse_cg_pairs[p].add(c)
         for subj, rel, obj in tqdm.tqdm(oie_triples):
-            subj_eg = nx.generators.ego.ego_graph(DG, subj, radius=2, undirected=True)
+            subj_eg = OLPEgoGraphDst.create_2hop_ego_graph(subj, cg_pairs, reverse_cg_pairs)
             eg_nodes.append(subj_eg.number_of_nodes())
             eg_edges.append(subj_eg.number_of_edges())
             subj_g, subj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(subj_eg, subj, tok_vocab)
-            obj_eg = nx.generators.ego.ego_graph(DG, obj, radius=2, undirected=True)
+            subj_node_toks, subj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(subj_node_tids, max_len)
+            obj_eg = OLPEgoGraphDst.create_2hop_ego_graph(obj, cg_pairs, reverse_cg_pairs)
             eg_nodes.append(obj_eg.number_of_nodes())
             eg_edges.append(obj_eg.number_of_edges())
             obj_g, obj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(obj_eg, obj, tok_vocab)
+            obj_node_toks, obj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(obj_node_tids, max_len)
             rel_tids = [tok_vocab.get(t, UNK_idx) for t in rel.split(' ')]
+            rel_toks = th.LongTensor(pad_sequence_to_length(rel_tids, max_len, lambda: PAD_idx))
+            rel_tlen = len(rel_tids)
             triple = (mention_vocab[subj], rel_vocab[rel], mention_vocab[obj])
-            self.graphs.append((subj_g, subj_node_tids, rel_tids, obj_g, obj_node_tids, triple))
+            self.graphs.append((subj_g, subj_node_toks, subj_node_tlens, rel_toks, rel_tlen,
+                                obj_g, obj_node_toks, obj_node_tlens, triple))
         # print('OLP EgoGraph avg #node=%.2f, #edge=%.2f' % (sum(eg_nodes)/len(eg_nodes), sum(eg_edges)/len(eg_edges)))
         self.avg_node_cnt = sum(eg_nodes) / len(eg_nodes)
         self.avg_edge_cnt = sum(eg_edges) / len(eg_edges)
+
+    @staticmethod
+    def create_2hop_ego_graph(ent: str, cg_pairs: dict, reverse_cg_pairs: dict) -> nx.DiGraph():
+        DG = nx.DiGraph()
+        edges = set()
+        # one-hop neighbours
+        one_hop_neighs = set()
+        if ent in cg_pairs:
+            for p in cg_pairs[ent]:
+                one_hop_neighs.add(p)
+                edges.add((ent, p))
+        if ent in reverse_cg_pairs:
+            for c in reverse_cg_pairs[ent]:
+                one_hop_neighs.add(c)
+                edges.add((c, ent))
+        # two-hop neighbours
+        for neigh in one_hop_neighs:
+            if neigh in cg_pairs:
+                for p in cg_pairs[neigh]:
+                    edges.add((neigh, p))
+            if neigh in reverse_cg_pairs:
+                for c in reverse_cg_pairs[neigh]:
+                    edges.add((c, neigh))
+        if len(edges) > 0:
+            DG.add_edges_from(edges)
+        else:
+            DG.add_node(ent)
+        # add self loops
+        for n in DG:
+            DG.add_edge(n, n)
+        return DG
 
     @staticmethod
     def networkx_to_dgl_graph(eg: nx.DiGraph, ego_ent: str, tok_vocab: dict) -> Tuple[dgl.graph, List[List[str]]]:
@@ -257,25 +312,25 @@ class OLPEgoGraphDst(data.Dataset):
         return self.graphs[idx]
 
     @staticmethod
+    def tids_list_to_tensor(tids: list, max_len: int) -> Tuple[th.tensor, list]:
+        # tids: 2D list
+        tlens = [min(len(tid), max_len) for tid in tids]
+        tids_tensor = [pad_sequence_to_length(tid, max_len, lambda: PAD_idx)
+                       for tid in tids]
+        return th.LongTensor(tids_tensor), tlens
+
+    @staticmethod
     def collate_fn(data: list) -> tuple:
-        subj_g_l, subj_node_tids_l, rel_tids_l, obj_g_l, obj_node_tids_l, triples = zip(*data)
+        subj_g_l, subj_node_toks_l, subj_node_tlens_l, rel_toks_l, rel_tlen_l,\
+            obj_g_l, obj_node_toks_l, obj_node_tlens_l, triples = zip(*data)
         subj_bg = dgl.batch(subj_g_l)
-        subj_node_tlens = [len(toks) for tids in subj_node_tids_l for toks in tids]
-        subj_node_toks = [pad_sequence_to_length(toks, max(subj_node_tlens), lambda: PAD_idx)
-                          for tids in subj_node_tids_l for toks in tids]
-        subj_node_tlens = th.LongTensor(subj_node_tlens)
-        subj_node_toks = th.LongTensor(subj_node_toks)
+        subj_node_toks = th.cat(subj_node_toks_l, 0)  # (n_cnt, max_l)
+        subj_node_tlens = th.LongTensor([tl for tlens in subj_node_tlens_l for tl in tlens])  # (n_cnt, )
+        rel_toks = th.stack(rel_toks_l, 0)     # (B, max_l)
+        rel_tlens = th.LongTensor(rel_tlen_l)  # (B, )
         obj_bg = dgl.batch(obj_g_l)
-        obj_node_tlens = [len(toks) for tids in obj_node_tids_l for toks in tids]
-        obj_node_toks = [pad_sequence_to_length(toks, max(obj_node_tlens), lambda: PAD_idx)
-                         for tids in obj_node_tids_l for toks in tids]
-        obj_node_tlens = th.LongTensor(obj_node_tlens)
-        obj_node_toks = th.LongTensor(obj_node_toks)
-        rel_tlens = [len(tids) for tids in rel_tids_l]   # (B,)
-        rel_toks = [pad_sequence_to_length(tids, max(rel_tlens), lambda: PAD_idx)
-                    for tids in rel_tids_l]  # (B, max_l)
-        rel_tlens = th.LongTensor(rel_tlens)
-        rel_toks = th.LongTensor(rel_toks)
+        obj_node_toks = th.cat(obj_node_toks_l, 0)  # (n_cnt, max_l)
+        obj_node_tlens = th.LongTensor([tl for tlens in obj_node_tlens_l for tl in tlens])  # (n_cnt, )
         return (subj_bg, subj_node_toks, subj_node_tlens, rel_toks, rel_tlens,
                 obj_bg, obj_node_toks, obj_node_tlens, triples)
 
@@ -481,7 +536,7 @@ def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTenso
     return th.LongTensor(concepts), th.LongTensor(cep_lens)
 
 
-def prepare_ingredients_TaxoRelGraph(dataset_dir: str) -> tuple:
+def prepare_ingredients_TaxoRelGraph(dataset_dir: str, phrase_max_len: int) -> tuple:
     # Load Concept Graph
     cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
     cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
@@ -505,12 +560,13 @@ def prepare_ingredients_TaxoRelGraph(dataset_dir: str) -> tuple:
         all_triple_ids_map['h'][(mention_vocab[h], rel_vocab[r])].add(mention_vocab[t])
         all_triple_ids_map['t'][(mention_vocab[t], rel_vocab[r])].add(mention_vocab[h])
     # create dataset
-    train_CGC_set = CGCEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab, concept_vocab)
-    dev_CGC_set = CGCEgoGraphDst(cg_pairs_dev, oie_triples_train, tok_vocab, concept_vocab)
-    test_CGC_set = CGCEgoGraphDst(cg_pairs_test, oie_triples_train, tok_vocab, concept_vocab)
-    train_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab, mention_vocab, rel_vocab)
-    dev_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_dev, tok_vocab, mention_vocab, rel_vocab)
-    test_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_test, tok_vocab, mention_vocab, rel_vocab)
+    train_CGC_set = CGCEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab, concept_vocab, phrase_max_len)
+    dev_CGC_set = CGCEgoGraphDst(cg_pairs_dev, oie_triples_train, tok_vocab, concept_vocab, phrase_max_len)
+    test_CGC_set = CGCEgoGraphDst(cg_pairs_test, oie_triples_train, tok_vocab, concept_vocab, phrase_max_len)
+    train_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_train, tok_vocab,
+                                   mention_vocab, rel_vocab, phrase_max_len)
+    dev_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_dev, tok_vocab, mention_vocab, rel_vocab, phrase_max_len)
+    test_OLP_set = OLPEgoGraphDst(cg_pairs_train, oie_triples_test, tok_vocab, mention_vocab, rel_vocab, phrase_max_len)
     return (train_CGC_set, dev_CGC_set, test_CGC_set, train_OLP_set, dev_OLP_set, test_OLP_set,
             tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
 

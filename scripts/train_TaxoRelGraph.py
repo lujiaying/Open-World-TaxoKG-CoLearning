@@ -23,8 +23,8 @@ from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('TaxoRelGraph')
-# ex.observers.append(FileStorageObserver("logs/TaxoRelGraph"))
-# ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
+ex.observers.append(FileStorageObserver("logs/TaxoRelGraph"))
+ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
 @ex.config
@@ -43,10 +43,11 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
+           'phrase_max_len': 16,
            'epoch': 500,
            'validate_freq': 10,
-           'CGC_batch_size': 16,
-           'OLP_batch_size': 256,
+           'CGC_batch_size': 64,
+           'OLP_batch_size': 512,
            'OLP_score_norm': 1,
            'emb_dim': 256,
            'tok_emb_dropout': 0.2,
@@ -207,7 +208,7 @@ def main(opt, _run, _log):
     train_CGC_set, dev_CGC_set, test_CGC_set,\
         train_OLP_set, dev_OLP_set, test_OLP_set,\
         tok_vocab, mention_vocab, concept_vocab,\
-        rel_vocab, all_oie_triples_map = prepare_ingredients_TaxoRelGraph(dataset_dir)
+        rel_vocab, all_oie_triples_map = prepare_ingredients_TaxoRelGraph(dataset_dir, opt['phrase_max_len'])
     train_CGC_iter = DataLoader(train_CGC_set, collate_fn=CGCEgoGraphDst.collate_fn,
                                 batch_size=opt['CGC_batch_size'], shuffle=True)
     dev_CGC_iter = DataLoader(dev_CGC_set, collate_fn=CGCEgoGraphDst.collate_fn,
@@ -254,6 +255,7 @@ def main(opt, _run, _log):
         taxorel_olp.train()
         train_OLP_loss = []
         train_CGC_loss = []
+        _log.info('[%s] start one epoch of OLP train' % (time.ctime()))
         for i_batch, (subj_bg, subj_node_toks, subj_node_tlens,
                       rel_toks, rel_tlens,
                       obj_bg, obj_node_toks, obj_node_tlens,
@@ -267,19 +269,11 @@ def main(opt, _run, _log):
             obj_node_tlens = obj_node_tlens.to(device)
             rel_toks = rel_toks.to(device)
             rel_tlens = rel_tlens.to(device)
-            tic = time.perf_counter()
             subj_node_embs = token_encoder(subj_node_toks, subj_node_tlens)
             obj_node_embs = token_encoder(obj_node_toks, obj_node_tlens)
             rel_embs = token_encoder(rel_toks, rel_tlens)
-            toc = time.perf_counter()
-            _log.info('token encoder elapsed time %.3f' % (toc-tic))
-            tic = time.perf_counter()
             pos_scores, neg_scores = taxorel_olp(subj_bg, subj_node_embs, rel_embs,
                                                  obj_bg, obj_node_embs)
-            toc = time.perf_counter()
-            _log.info('taxorel_olp elapsed time %.3f' % (toc-tic))
-            if i_batch >= 1:
-                exit(0)  # debug
             target = pos_scores.new_tensor([-1])
             loss = OLP_criterion(pos_scores, neg_scores, target)
             train_OLP_loss.append(loss.item())

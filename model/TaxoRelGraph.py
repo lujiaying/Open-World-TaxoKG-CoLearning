@@ -169,29 +169,14 @@ class TaxoRelOLP(nn.Module):
 
     def forward(self, subj_bg: dgl.DGLGraph, subj_node_embs: th.Tensor, rel_tok_embs: th.Tensor,
                 obj_bg: dgl.DGLGraph, obj_node_embs: th.Tensor):
-        tic = time.perf_counter()
         h_embs = self._compute_graph_emb(subj_bg, subj_node_embs)   # (batch, emb_d)
-        toc = time.perf_counter()
-        print('compute_graph_emb h elapsed time %.3f' % (toc-tic))
-        print('subj_bg avg #node', subj_bg.batch_num_nodes().float().mean(), '#edge', subj_bg.batch_num_edges().float().mean())
-        tic = time.perf_counter()
+        # print('subj_bg avg #node', subj_bg.batch_num_nodes().float().mean(), '#edge', subj_bg.batch_num_edges().float().mean())
         t_embs = self._compute_graph_emb(obj_bg, obj_node_embs)      # (batch, emb_d)
-        toc = time.perf_counter()
-        print('compute_graph_emb t elapsed time %.3f' % (toc-tic))
-        print('obj_bg avg #node', obj_bg.batch_num_nodes().float().mean(), '#edge', obj_bg.batch_num_edges().float().mean())
-        tic = time.perf_counter()
+        # print('obj_bg avg #node', obj_bg.batch_num_nodes().float().mean(), '#edge', obj_bg.batch_num_edges().float().mean())
         r_embs = self.rel_encoder(rel_tok_embs)
-        toc = time.perf_counter()
-        print('rel_encoder r elapsed time %.3f' % (toc-tic))
-        tic = time.perf_counter()
         corrupt_h_embs, corrupt_t_embs = self._sample_batch_negative_triples(h_embs, t_embs)
-        toc = time.perf_counter()
-        print('sample_batch_negative time %.3f' % (toc-tic))
-        tic = time.perf_counter()
         pos_scores = self._cal_distance(h_embs, r_embs, t_embs)
         neg_scores = self._cal_distance(corrupt_h_embs, r_embs, corrupt_t_embs)
-        toc = time.perf_counter()
-        print('compute two distance time %.3f' % (toc-tic))
         return pos_scores, neg_scores
 
     def test_tail_pred(self, h_embs: th.tensor, r_tok_embs: th.tensor,
