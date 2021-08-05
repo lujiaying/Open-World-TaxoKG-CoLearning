@@ -50,8 +50,8 @@ class CompGCN(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, is_semantic_edge: bool = True):
         super(CompGCN, self).__init__()
         self.is_semantic_edge = is_semantic_edge
-        self.W_O = nn.Linear(in_dim, out_dim)   # for original relations
-        self.W_I = nn.Linear(in_dim, out_dim)   # for inverse relations
+        self.W_O = nn.Linear(in_dim, out_dim)     # for original relations
+        self.W_I = nn.Linear(in_dim, out_dim)     # for inverse relations
         # note: self-loop will be mutliplied by both W_I and W_O
         if self.is_semantic_edge:
             self.W_rel = nn.Linear(in_dim, out_dim)
@@ -91,9 +91,13 @@ class TaxoRelCGC(nn.Module):
         self.gnn1 = CompGCN(emb_dim, emb_dim//4)
         self.gnn2 = CompGCN(emb_dim//4, emb_dim)
         self.cep_encoder = nn.Sequential(
-                nn.Linear(emb_dim, emb_dim),
-                nn.ReLU()
+                nn.Linear(emb_dim, emb_dim//4),
+                nn.ReLU(),
+                nn.Linear(emb_dim//4, emb_dim)
                 )
+        """
+        self.cep_encoder = nn.Linear(emb_dim, emb_dim)
+        """
 
     def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor, cep_embs: th.Tensor):
         """
@@ -104,11 +108,12 @@ class TaxoRelCGC(nn.Module):
         """
         node_embs = self.dropout(node_embs)
         edge_embs = self.dropout(edge_embs)
+        cep_embs = self.dropout(cep_embs)
         hn, he = self.gnn1(graphs, node_embs, edge_embs)
         hn = F.relu(hn)
         he = F.relu(he)
         hn, he = self.gnn2(graphs, hn, he)   # (n/e_cnt, emb_d)
-        hn = F.relu(hn)    # (n_cnt, emb_d)
+        # hn = F.relu(hn)    # (n_cnt, emb_d), not activate
         graphs.ndata['h'] = hn
         hg = dgl.readout_nodes(graphs, 'h', op=self.g_readout)  # (batch, emb_d)
         cep_embs = self.cep_encoder(cep_embs)        # (all_c_cnt, emb_d)
@@ -126,17 +131,20 @@ class TaxoRelOLP(nn.Module):
         self.gnn1 = CompGCN(emb_dim, emb_dim//4, is_semantic_edge=False)
         self.gnn2 = CompGCN(emb_dim//4, emb_dim, is_semantic_edge=False)
         self.rel_encoder = nn.Sequential(
-                nn.Linear(emb_dim, emb_dim),
-                nn.ReLU()
+                nn.Linear(emb_dim, emb_dim//4),
+                nn.ReLU(),
+                nn.Linear(emb_dim//4, emb_dim),
                 )
+        """
+        self.rel_encoder = nn.Linear(emb_dim, emb_dim)
+        """
 
     def _compute_graph_emb(self, bg: dgl.DGLGraph, node_embs: th.Tensor) -> th.Tensor:
-        node_embs = self.dropout(node_embs)
         _ = None
         hn, _ = self.gnn1(bg, node_embs, _)
         hn = F.relu(hn)
         hn, _ = self.gnn2(bg, hn, _)
-        hn = F.relu(hn)
+        # hn = F.relu(hn)  # not activate
         bg.ndata['h'] = hn
         if self.g_readout == 'central_node':
             g_node_cnts = bg.batch_num_nodes()   # (B, )
@@ -169,10 +177,11 @@ class TaxoRelOLP(nn.Module):
 
     def forward(self, subj_bg: dgl.DGLGraph, subj_node_embs: th.Tensor, rel_tok_embs: th.Tensor,
                 obj_bg: dgl.DGLGraph, obj_node_embs: th.Tensor):
+        subj_node_embs = self.dropout(subj_node_embs)
+        obj_node_embs = self.dropout(obj_node_embs)
+        rel_tok_embs = self.dropout(rel_tok_embs)
         h_embs = self._compute_graph_emb(subj_bg, subj_node_embs)   # (batch, emb_d)
-        # print('subj_bg avg #node', subj_bg.batch_num_nodes().float().mean(), '#edge', subj_bg.batch_num_edges().float().mean())
         t_embs = self._compute_graph_emb(obj_bg, obj_node_embs)      # (batch, emb_d)
-        # print('obj_bg avg #node', obj_bg.batch_num_nodes().float().mean(), '#edge', obj_bg.batch_num_edges().float().mean())
         r_embs = self.rel_encoder(rel_tok_embs)
         corrupt_h_embs, corrupt_t_embs = self._sample_batch_negative_triples(h_embs, t_embs)
         pos_scores = self._cal_distance(h_embs, r_embs, t_embs)

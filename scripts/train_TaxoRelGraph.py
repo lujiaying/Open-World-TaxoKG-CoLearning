@@ -44,16 +44,18 @@ def my_config():
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
            'phrase_max_len': 16,
+           'OLP_2hop_egograph': True,
            'epoch': 500,
            'validate_freq': 10,
            'CGC_batch_size': 64,
            'OLP_batch_size': 512,
            'OLP_score_norm': 1,
            'emb_dim': 256,
-           'tok_emb_dropout': 0.2,
+           'dropout': 0.2,
            'cgc_g_readout': 'mean',
            'olp_g_readout': 'mean',
-           'optim_lr': 3e-4,
+           'CGC_optim_lr': 1e-3,
+           'OLP_optim_lr': 3e-4,
            'optim_wdecay': 0.5e-4,
            'OLP_loss_margin': 1.0,
            }
@@ -208,7 +210,8 @@ def main(opt, _run, _log):
     train_CGC_set, dev_CGC_set, test_CGC_set,\
         train_OLP_set, dev_OLP_set, test_OLP_set,\
         tok_vocab, mention_vocab, concept_vocab,\
-        rel_vocab, all_oie_triples_map = prepare_ingredients_TaxoRelGraph(dataset_dir, opt['phrase_max_len'])
+        rel_vocab, all_oie_triples_map = prepare_ingredients_TaxoRelGraph(dataset_dir, opt['phrase_max_len'],
+                                                                          opt['OLP_2hop_egograph'])
     train_CGC_iter = DataLoader(train_CGC_set, collate_fn=CGCEgoGraphDst.collate_fn,
                                 batch_size=opt['CGC_batch_size'], shuffle=True)
     dev_CGC_iter = DataLoader(dev_CGC_set, collate_fn=CGCEgoGraphDst.collate_fn,
@@ -228,9 +231,9 @@ def main(opt, _run, _log):
     # Build model
     token_encoder = TokenEncoder(len(tok_vocab), opt['emb_dim'])
     token_encoder = token_encoder.to(device)
-    taxorel_cgc = TaxoRelCGC(opt['emb_dim'], opt['tok_emb_dropout'], opt['cgc_g_readout'])
+    taxorel_cgc = TaxoRelCGC(opt['emb_dim'], opt['dropout'], opt['cgc_g_readout'])
     taxorel_cgc = taxorel_cgc.to(device)
-    taxorel_olp = TaxoRelOLP(opt['emb_dim'], opt['tok_emb_dropout'], opt['olp_g_readout'],
+    taxorel_olp = TaxoRelOLP(opt['emb_dim'], opt['dropout'], opt['olp_g_readout'],
                              opt['OLP_score_norm'])
     taxorel_olp = taxorel_olp.to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
@@ -240,8 +243,8 @@ def main(opt, _run, _log):
     OLP_criterion = OLP_criterion.to(device)
     params_CGC = list(token_encoder.parameters()) + list(taxorel_cgc.parameters())
     params_OLP = list(token_encoder.parameters()) + list(taxorel_olp.parameters())
-    optimizer_CGC = th.optim.Adam(params_CGC, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
-    optimizer_OLP = th.optim.Adam(params_OLP, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    optimizer_CGC = th.optim.Adam(params_CGC, opt['CGC_optim_lr'], weight_decay=opt['optim_wdecay'])
+    optimizer_OLP = th.optim.Adam(params_OLP, opt['OLP_optim_lr'], weight_decay=opt['optim_wdecay'])
 
     all_cep_toks, all_cep_tok_lens = get_concept_tok_tensor(concept_vocab, tok_vocab)
     all_cep_toks = all_cep_toks.to(device)

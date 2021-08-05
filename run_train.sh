@@ -69,7 +69,7 @@
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
 #     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #     'opt.optim_lr=3e-4' 'opt.batch_size=512'
-# python -m scripts.train_opentransE with 'motivation="add grad_norm, batch=512"'\
+# python -m scripts.train_opentransE with 'motivation="default param"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
 #     'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #     'opt.optim_lr=3e-4' 'opt.batch_size=512'
@@ -93,17 +93,37 @@
 #    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
+#    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512'
+# python -m scripts.train_opentransE with 'motivation="ReVerb datasets"'\
+#    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512'
 
 # Jul 28
 # python -m scripts.train_TaxoRelGraph with 'motivation="default with u_sub_e instead of v_sub_e"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
 #     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
-# python -m scripts.train_TaxoRelGraph with 'motivation="MTL default params run"'\
+# python -m scripts.train_TaxoRelGraph with 'motivation="MTL, small batch size"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
-#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' \
+#     'opt.CGC_batch_size=16' 'opt.OLP_batch_size=128' 'opt.epoch=1000'
+# python -m scripts.train_TaxoRelGraph with 'motivation="MTL, large batch, MLP for cep, rel emb"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'
 
 # Jul 31
-python -m scripts.train_TaxoRelGraph with 'motivation="OLP use central_node as readout"'\
-    'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
-    'opt.checkpoint_dir="checkpoints/TaxoRelGraph"'\
-    'opt.olp_g_readout="central_node"'
+# python -m scripts.train_TaxoRelGraph with 'motivation="MTL; large batch, MLP, dropout"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'
+# python -m scripts.train_TaxoRelGraph with 'motivation="MTL; large batch, MLP, dropout"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
+#     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'
+
+# Aug 5
+ python -m scripts.train_TaxoRelGraph with 'motivation="OLP 1hop eg"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'\
+     'opt.OLP_2hop_egograph=False'
