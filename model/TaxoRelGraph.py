@@ -10,7 +10,6 @@ k-hop ego local graph of entity `e` for k-layer COMPGCN
 h(e/c/r) = mean(emb(e_t1, e_t2, ...))
 score func for entity `e` and concept `c`: sigmoid(COMPGCN(h(e))^T * MLP(h(c)))
 """
-import time
 from typing import Tuple
 
 import torch as th

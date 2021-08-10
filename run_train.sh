@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG-OwnModel
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_TaxoRelGraph
+#SBATCH --output=logs/slurm_CompGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -123,7 +123,21 @@
 #     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'
 
 # Aug 5
- python -m scripts.train_TaxoRelGraph with 'motivation="OLP 1hop eg"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
-     'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'\
-     'opt.OLP_2hop_egograph=False'
+#  python -m scripts.train_TaxoRelGraph with 'motivation="OLP 1hop eg"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#      'opt.checkpoint_dir="checkpoints/TaxoRelGraph"' 'opt.epoch=1500'\
+#      'opt.OLP_2hop_egograph=False'
+
+# Aug 8
+# python -m scripts.train_CompGCN with 'motivation="large batch + clip grad"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.optim_wdecay=0.0'\
+#     'opt.clip_grad_max_norm=0.5'
+python -m scripts.train_CompGCN with 'motivation="default hparams"'\
+    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'
+# python -m scripts.train_CompGCN with 'motivation="large batch size"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
+#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.epoch=800'
+# python -m scripts.train_CompGCN with 'motivation="large batch size"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.epoch=800'

@@ -17,6 +17,7 @@ import dgl
 PAD_idx = 0
 UNK_idx = PAD_idx+1
 SELF_LOOP = "SELF_LOOP"
+TAXO_EDGE = "IsA"
 
 
 class CGCOLPTriplesDst(data.Dataset):
@@ -367,6 +368,131 @@ class OLPEgoGraphDst(data.Dataset):
                 obj_bg, obj_node_toks, obj_node_tlens, triples)
 
 
+class CGCOLPGraphTrainDst(data.Dataset):
+    """
+    One big graph that contains both CGC and OLP info
+    """
+    def __init__(self, cg_pairs: Dict[str, set], oie_triples: List[Tuple[str, str, str]],
+                 tok_vocab: dict, node_vocab: dict, edge_vocab: dict):
+        g = dgl.graph((th.tensor([0]), th.tensor([0])))
+        g = dgl.remove_edges(g, th.tensor([0, 0]))   # graph with one node
+        g = dgl.add_nodes(g, len(node_vocab)-1)
+        # add taxo edges
+        reverse_cg_pairs = defaultdict(set)
+        for c, ps in cg_pairs.items():
+            for p in ps:
+                reverse_cg_pairs[p].add(c)
+            c_nid = node_vocab[c]
+            ps_nids = [node_vocab[p] for p in ps]
+            g = dgl.add_edges(g, th.tensor([c_nid for _ in range(len(ps))]), th.tensor(ps_nids),
+                              {'e_vid': th.tensor([[edge_vocab[TAXO_EDGE]] for _ in range(len(ps))])})
+        # add non-taxo edges
+        all_triples_h = defaultdict(set)
+        all_triples_t = defaultdict(set)
+        for subj, rel, obj in oie_triples:
+            all_triples_h[(subj, rel)].add(obj)
+            all_triples_t[(obj, rel)].add(subj)
+            g = dgl.add_edges(g, th.tensor([node_vocab[subj]]), th.tensor([node_vocab[obj]]),
+                              {'e_vid': th.tensor([[edge_vocab[rel]]])})
+        g = dgl.remove_self_loop(g)   # ensure no self-loops
+        self.graph = g
+        # prepare triples (head/tail, BCE labels)
+        self.triples = []
+        for c, ps in cg_pairs.items():
+            for p in ps:
+                tail_BCE_label = th.zeros(len(node_vocab))
+                ps_nids = [node_vocab[_] for _ in ps]
+                tail_BCE_label[ps_nids] = 1.0
+                head_BCE_label = th.zeros(len(node_vocab))
+                cs_nids = [node_vocab[_] for _ in reverse_cg_pairs[p]]
+                head_BCE_label[cs_nids] = 1.0
+                hid = node_vocab[c]
+                rid = edge_vocab[TAXO_EDGE]
+                tid = node_vocab[p]
+                self.triples.append((hid, rid, tid, head_BCE_label, tail_BCE_label))
+        for subj, rel, obj in oie_triples:
+            tail_BCE_label = th.zeros(len(node_vocab))
+            tail_nids = [node_vocab[_] for _ in all_triples_h[(subj, rel)]]
+            tail_BCE_label[tail_nids] = 1.0
+            head_BCE_label = th.zeros(len(node_vocab))
+            head_nids = [node_vocab[_] for _ in all_triples_t[(obj, rel)]]
+            head_BCE_label[head_nids] = 1.0
+            hid = node_vocab[subj]
+            rid = edge_vocab[rel]
+            tid = node_vocab[obj]
+            self.triples.append((hid, rid, tid, head_BCE_label, tail_BCE_label))
+
+    def __len__(self):
+        return len(self.triples)
+
+    def __getitem__(self, idx: int) -> tuple:
+        return self.triples[idx]
+
+    @staticmethod
+    def collate_fn(data: list) -> tuple:
+        """
+        head_BCE_labels: predction on head
+        tail_BCE_labels: predction on tail
+        """
+        hids, rids, tids, head_BCE_labels, tail_BCE_labels = zip(*data)
+        hids = th.LongTensor(hids)  # in node_vocab
+        rids = th.LongTensor(rids)  # in edge_vocab
+        tids = th.LongTensor(tids)  # in node_vocab
+        head_BCE_labels = th.stack(head_BCE_labels, 0)  # (B, n_cnt)
+        tail_BCE_labels = th.stack(tail_BCE_labels, 0)  # (B, n_cnt)
+        return (hids, rids, tids, head_BCE_labels, tail_BCE_labels)
+
+
+class CompGCNCGCTripleDst(data.Dataset):
+    def __init__(self, cg_pairs: Dict[str, set],
+                 node_vocab: dict, edge_vocab: dict, concept_vocab: dict):
+        self.triples = []
+        for c, ps in cg_pairs.items():
+            hid = node_vocab[c]
+            rid = edge_vocab[TAXO_EDGE]
+            cep_ids = [concept_vocab[p] for p in ps]
+            self.triples.append((hid, rid, cep_ids))
+
+    def __len__(self):
+        return len(self.triples)
+
+    def __getitem__(self, idx: int) -> tuple:
+        return self.triples[idx]
+
+    @staticmethod
+    def collate_fn(data: list) -> tuple:
+        hids, rids, cep_ids_l = zip(*data)
+        hids = th.LongTensor(hids)  # in node_vocab
+        rids = th.LongTensor(rids)  # in edge_vocab
+        # cep_ids_l varialble length 2d list
+        return (hids, rids, cep_ids_l)
+
+
+class CompGCNOLPTripleDst(data.Dataset):
+    def __init__(self, oie_triples: List[Tuple[str, str, str]],
+                 mention_vocab: dict, edge_vocab: dict):
+        self.triples = []
+        for subj, rel, obj in oie_triples:
+            sid = mention_vocab[subj]
+            rid = edge_vocab[rel]
+            oid = mention_vocab[obj]
+            self.triples.append((sid, rid, oid))
+
+    def __len__(self):
+        return len(self.triples)
+
+    def __getitem__(self, idx: int) -> tuple:
+        return self.triples[idx]
+
+    @staticmethod
+    def collate_fn(data: list) -> tuple:
+        sids, rids, oids = zip(*data)
+        sids = th.LongTensor(sids)  # in mention_vocab
+        rids = th.LongTensor(rids)  # in edge_vocab
+        oids = th.LongTensor(oids)  # in mention_vocab
+        return (sids, rids, oids)
+
+
 def load_cg_pairs(fpath: str) -> Dict[str, set]:
     concept_pairs = dict()   # ent: {cep1, cep2}
     with open(fpath) as fopen:
@@ -381,7 +507,7 @@ def cg_pairs_to_cg_triples(concept_pairs: Dict[str, set]) -> List[Tuple[str, str
     triples = []
     for ent, cep_set in concept_pairs.items():
         for cep in cep_set:
-            triples.append((ent, "IsA", cep))
+            triples.append((ent, TAXO_EDGE, cep))
     return triples
 
 
@@ -605,6 +731,53 @@ def prepare_ingredients_TaxoRelGraph(dataset_dir: str, phrase_max_len: int, OLP_
             tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
 
 
+def prepare_ingredients_CompGCN(dataset_dir: str) -> tuple:
+    """
+    one single big graph to get node, edge embeddings
+    let all candidaites exist in graph. Candidate can be disconnected to other nodes.
+    """
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    # Load Open KG
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    tok_vocab = get_tok_vocab(cg_pairs_to_cg_triples(cg_pairs_train), oie_triples_train)
+    mention_vocab, edge_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    edge_vocab[TAXO_EDGE] = len(edge_vocab)   # contains all possible semantic edges
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for OLP filtered eval setting
+    for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        all_triple_ids_map['h'][(mention_vocab[h], edge_vocab[r])].add(mention_vocab[t])
+        all_triple_ids_map['t'][(mention_vocab[t], edge_vocab[r])].add(mention_vocab[h])
+    # build datasets
+    node_vocab = {}  # contains train/dev/test mentions, concepts
+    node_vocab.update(mention_vocab)
+    for ent in set(cg_pairs_train.keys()).union(set(cg_pairs_dev.keys())).union(set(cg_pairs_test.keys())):
+        if ent not in node_vocab:
+            node_vocab[ent] = len(node_vocab)
+    for cep in concept_vocab:
+        if cep not in node_vocab:
+            node_vocab[cep] = len(node_vocab)
+    train_set = CGCOLPGraphTrainDst(cg_pairs_train, oie_triples_train, tok_vocab, node_vocab,
+                                    edge_vocab)
+    dev_CGC_set = CompGCNCGCTripleDst(cg_pairs_dev, node_vocab, edge_vocab, concept_vocab)
+    test_CGC_set = CompGCNCGCTripleDst(cg_pairs_test, node_vocab, edge_vocab, concept_vocab)
+    dev_OLP_set = CompGCNOLPTripleDst(oie_triples_dev, mention_vocab, edge_vocab)
+    test_OLP_set = CompGCNOLPTripleDst(oie_triples_test, mention_vocab, edge_vocab)
+    return (train_set, dev_CGC_set, test_CGC_set, dev_OLP_set, test_OLP_set,
+            tok_vocab, node_vocab, edge_vocab, mention_vocab, concept_vocab, all_triple_ids_map)
+
+
 if __name__ == '__main__':
     dataset_dir = 'data/CGC-OLP-BENCH/SEMedical-ReVerb'
     dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-ReVerb'
@@ -619,3 +792,4 @@ if __name__ == '__main__':
     # train_set, tok_vocab, mention_vocab, concept_vocab = prepare_ingredients_transE(dataset_dir)
     # train_iter = data.DataLoader(train_set, collate_fn=collate_fn_triples, batch_size=4, shuffle=True)
     # prepare_ingredients_TaxoRelGraph(dataset_dir)
+    # prepare_ingredients_CompGCN(dataset_dir, 16)
