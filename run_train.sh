@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=TaxoKG-OwnModel
+#SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/slurm_CompGCN
 
@@ -129,15 +129,21 @@
 #      'opt.OLP_2hop_egograph=False'
 
 # Aug 8
-# python -m scripts.train_CompGCN with 'motivation="large batch + clip grad"'\
+# python -m scripts.train_CompGCN with 'motivation="DistMult add loss.backward"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
-#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.optim_wdecay=0.0'\
-#     'opt.clip_grad_max_norm=0.5'
-python -m scripts.train_CompGCN with 'motivation="default hparams"'\
-    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'
-# python -m scripts.train_CompGCN with 'motivation="large batch size"'\
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
+# python -m scripts.train_CompGCN with 'motivation="TransE default param"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'
+# python -m scripts.train_CompGCN with 'motivation="DistMult"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
+# python -m scripts.train_CompGCN with 'motivation="default hparams"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
-#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.epoch=800'
-# python -m scripts.train_CompGCN with 'motivation="large batch size"'\
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
+# python -m scripts.train_CompGCN with 'motivation="DistMult"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
-#     'opt.batch_size=512' 'opt.optim_lr=1e-4' 'opt.epoch=800'
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
+# python -m scripts.train_CompGCN with 'motivation="DistMult for big graph"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'\
+#     'opt.epoch=300' 'opt.batch_size=2048' 'opt.optim_lr=3e-4'

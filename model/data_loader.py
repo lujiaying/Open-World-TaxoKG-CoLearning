@@ -379,7 +379,7 @@ class CGCOLPGraphTrainDst(data.Dataset):
         g = dgl.add_nodes(g, len(node_vocab)-1)
         # add taxo edges
         reverse_cg_pairs = defaultdict(set)
-        for c, ps in cg_pairs.items():
+        for c, ps in tqdm.tqdm(cg_pairs.items()):
             for p in ps:
                 reverse_cg_pairs[p].add(c)
             c_nid = node_vocab[c]
@@ -389,7 +389,7 @@ class CGCOLPGraphTrainDst(data.Dataset):
         # add non-taxo edges
         all_triples_h = defaultdict(set)
         all_triples_t = defaultdict(set)
-        for subj, rel, obj in oie_triples:
+        for subj, rel, obj in tqdm.tqdm(oie_triples):
             all_triples_h[(subj, rel)].add(obj)
             all_triples_t[(obj, rel)].add(subj)
             g = dgl.add_edges(g, th.tensor([node_vocab[subj]]), th.tensor([node_vocab[obj]]),
@@ -398,7 +398,7 @@ class CGCOLPGraphTrainDst(data.Dataset):
         self.graph = g
         # prepare triples (head/tail, BCE labels)
         self.triples = []
-        for c, ps in cg_pairs.items():
+        for c, ps in tqdm.tqdm(cg_pairs.items()):
             for p in ps:
                 tail_BCE_label = th.zeros(len(node_vocab))
                 ps_nids = [node_vocab[_] for _ in ps]
@@ -410,7 +410,7 @@ class CGCOLPGraphTrainDst(data.Dataset):
                 rid = edge_vocab[TAXO_EDGE]
                 tid = node_vocab[p]
                 self.triples.append((hid, rid, tid, head_BCE_label, tail_BCE_label))
-        for subj, rel, obj in oie_triples:
+        for subj, rel, obj in tqdm.tqdm(oie_triples):
             tail_BCE_label = th.zeros(len(node_vocab))
             tail_nids = [node_vocab[_] for _ in all_triples_h[(subj, rel)]]
             tail_BCE_label[tail_nids] = 1.0

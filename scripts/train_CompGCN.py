@@ -45,15 +45,19 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
-           'epoch': 1000,
+           'epoch': 500,
            'validate_freq': 10,
-           'batch_size': 256,
+           'batch_size': 128,
            'dist_norm': 1,
-           'gamma': 5.0,
-           'emb_dim': 200,
-           'dropout': 0.2,
+           'gamma': 9.0,
+           'gcn_layer': 1,
+           'score_func': 'TransE',
+           'tok_emb_dim': 200,
+           'gcn_emb_dim': 200,
+           'dropout': 0.1,
+           'gcn_dropout': 0.1,
            'optim_lr': 1e-3,
-           'optim_wdecay': 0.5e-4,
+           'optim_wdecay': 0.0,
            'label_smooth': 0.1,
            'clip_grad_max_norm': 2.0,
            }
@@ -125,7 +129,8 @@ def test_OLP_task(compgcn_transe: th.nn.Module, test_iter: DataLoader,
             # tail pred
             pred_tails = compgcn_transe.predict(subj_embs, rel_embs, obj_embs, ment_embs, False)  # (B, ment_cnt)
             MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, sids, rids,
-                                                         oids, True, all_oie_triples_map)
+                                                         oids, True, all_oie_triples_map,
+                                                         descending=True)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
@@ -133,7 +138,8 @@ def test_OLP_task(compgcn_transe: th.nn.Module, test_iter: DataLoader,
             # head pred
             pred_heads = compgcn_transe.predict(subj_embs, rel_embs, obj_embs, ment_embs, True)  # (B, ment_cnt)
             MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, sids, rids,
-                                                         oids, False, all_oie_triples_map)
+                                                         oids, False, all_oie_triples_map,
+                                                         descending=True)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
@@ -184,16 +190,20 @@ def main(opt, _run, _log):
     _log.info('CGC dev #triple=%d, test #triple=%d' % (len(dev_CGC_set), len(test_CGC_set)))
     _log.info('OLP dev #triple=%d, test #triple=%d' % (len(dev_OLP_set), len(test_OLP_set)))
     # build model
-    token_encoder = TokenEncoder(len(tok_vocab), opt['emb_dim']).to(device)
-    compgcn_transe = CompGCNTransE(opt['emb_dim'], opt['dropout'], opt['dist_norm'], opt['gamma']).to(device)
+    token_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
+    compgcn_transe = CompGCNTransE(opt['tok_emb_dim'], opt['gcn_emb_dim'], opt['dropout'],
+                                   opt['gcn_dropout'], opt['dist_norm'], opt['gamma'],
+                                   opt['gcn_layer'], opt['score_func']).to(device)
     criterion = th.nn.BCELoss().to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     params = list(token_encoder.parameters()) + list(compgcn_transe.parameters())
     optimizer = th.optim.Adam(params, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    scheduler = th.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
 
     # start train, eval
     best_sum_MRR = 0.0
     w_CGC_MRR = 0.5
+    kill_cnt = 0
     for i_epoch in range(opt['epoch']):
         # do train
         token_encoder.train()
@@ -211,16 +221,18 @@ def main(opt, _run, _log):
             edge_toks, edge_tok_lens = get_concept_tok_tensor(edge_vocab, tok_vocab)
             node_tok_embs = token_encoder(node_toks.to(device), node_tok_lens.to(device))
             edge_tok_embs = token_encoder(edge_toks.to(device), edge_tok_lens.to(device))
-            hn, score = compgcn_transe(g, node_tok_embs, edge_tok_embs, True,
+            hn, score = compgcn_transe(g, node_tok_embs, edge_tok_embs,
                                        hids, rids, tids, is_head_pred)
             target = head_BCE_labels if is_head_pred else tail_BCE_labels
             # label smoothing for better performance
             target = (1.0 - opt['label_smooth']) * target + (1.0 / len(node_vocab))
             loss = criterion(score, target.to(device))
             th.nn.utils.clip_grad_norm_(params, max_norm=opt['clip_grad_max_norm'], norm_type=2)
+            loss.backward()
             optimizer.step()
             train_loss.append(loss.item())
             is_head_pred = (is_head_pred + 1) % 2
+            scheduler.step()
         avg_loss = sum(train_loss) / len(train_loss)
         _run.log_scalar("train.CGC.loss", avg_loss, i_epoch)
         _log.info('[%s] epoch#%d train Done, avg BCE loss=%.5f' % (time.ctime(), i_epoch, avg_loss))
@@ -251,7 +263,7 @@ def main(opt, _run, _log):
             _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
             _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
                       i_epoch, OLP_MRR, H10, H30, H50))
-            if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR >= best_sum_MRR:
+            if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR - best_sum_MRR > 1e-5:
                 sum_MRR = w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR
                 _log.info('Save best model at eopoch#%d, prev sum_MRR=%.3f, cur sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)' % (
                           i_epoch, best_sum_MRR, sum_MRR, CGC_MRR, OLP_MRR))
@@ -261,6 +273,14 @@ def main(opt, _run, _log):
                          'token_encoder': token_encoder.state_dict(),
                          'compgcn_transe': compgcn_transe.state_dict(),
                          }, save_path)
+            else:
+                kill_cnt += 1
+                if kill_cnt % 10 == 0 and compgcn_transe.gamma > 5.0:
+                    compgcn_transe.gamma -= 5.0
+                    _log.info('Gamma decay on saturation, update to %f' % (compgcn_transe.gamma))
+                if kill_cnt > 25:
+                    _log.info('Early Stopping!!')
+                    break  # break epoch training
     # after all epochs, test based on best checkpoint
     checkpoint = th.load(save_path)
     token_encoder.load_state_dict(checkpoint['token_encoder'])

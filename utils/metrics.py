@@ -44,7 +44,7 @@ def cal_reciprocal_rank(actual: list, pred: list) -> float:
 
 
 def cal_OLP_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
-                    is_tail_preds: bool, all_oie_triples_map: dict) -> tuple:
+                    is_tail_preds: bool, all_oie_triples_map: dict, descending: bool = False) -> tuple:
     # adujst pred score for filtered setting
     preds_to_ignore = preds.new_zeros(preds.size())  # non-zero entries for existing triples
     for i in range(preds.size(0)):
@@ -58,7 +58,7 @@ def cal_OLP_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
             if h in ents_to_ignore:
                 ents_to_ignore.remove(h)
     preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
-    preds_idx = preds.argsort(dim=1)   # B*ent_c, ascending since it is distance
+    preds_idx = preds.argsort(dim=1, descending=descending)   # B*ent_c, ascending since it is distance
     # cal metrics
     """
     # GPU: cost 0.2s
