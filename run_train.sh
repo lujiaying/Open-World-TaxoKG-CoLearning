@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_CompGCN
+#SBATCH --output=logs/slurm_OpenTransE
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -147,3 +147,39 @@
 #     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
 #     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'\
 #     'opt.epoch=300' 'opt.batch_size=2048' 'opt.optim_lr=3e-4'
+# python -m scripts.train_CompGCN with 'motivation="DistMult for big graph"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
+#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'\
+#     'opt.epoch=300' 'opt.batch_size=2048' 'opt.optim_lr=3e-4'
+
+# Agu 17
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+python -m scripts.train_opentransE with 'motivation="DistMult"'\
+   'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
+   'opt.model_type="DistMult"' 'opt.emb_dim=200'\
+   'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+   'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'

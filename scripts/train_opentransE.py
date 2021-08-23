@@ -18,7 +18,7 @@ from neptunecontrib.monitoring.sacred import NeptuneObserver
 
 from model.data_loader import prepare_ingredients_transE, get_concept_tok_tensor
 from model.data_loader import collate_fn_triples, collate_fn_CGCpairs, collate_fn_oie_triples
-from model.TransE import OpenTransE
+from model.TransE import OpenTransE, OpenDistMult
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
@@ -43,6 +43,7 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
+           'model_type': 'TransE',
            'epoch': 1000,
            'validate_freq': 10,
            'batch_size': 256,
@@ -57,14 +58,14 @@ def my_config():
            }
 
 
-def cal_CGC_metrics(preds: th.Tensor, golds: list) -> Tuple[list, list, list, list, list]:
+def cal_CGC_metrics(preds: th.Tensor, golds: list, descending: bool) -> Tuple[list, list, list, list, list]:
     topk = 15
     MAP = []     # MAP@15
     MRR = []
     P1 = []
     P3 = []
     P10 = []
-    preds_idx = preds.argsort(dim=1)    # (B, cep_cnt)
+    preds_idx = preds.argsort(dim=1, descending=descending)    # (B, cep_cnt)
     for i_batch in range(len(golds)):
         gold = golds[i_batch]
         pred_idx = preds_idx[i_batch].tolist()
@@ -83,7 +84,7 @@ def cal_CGC_metrics(preds: th.Tensor, golds: list) -> Tuple[list, list, list, li
 
 
 def test_CGC_task(model: th.nn.Module, cg_iter: DataLoader, tok_vocab: dict,
-                  concept_vocab: dict, device: th.device) -> tuple:
+                  concept_vocab: dict, device: th.device, descending: bool) -> tuple:
     all_concepts, all_cep_lens = get_concept_tok_tensor(concept_vocab, tok_vocab)
     all_concepts = all_concepts.to(device)   # (cep_cnt, max_l)
     all_concept_embs = model._get_composition_emb(all_concepts, all_cep_lens, model.mention_func)  # (cep_cnt, emb_d)
@@ -100,7 +101,7 @@ def test_CGC_task(model: th.nn.Module, cg_iter: DataLoader, tok_vocab: dict,
             r_batch = ent_batch.new_tensor([tok_vocab["IsA"] for _ in range(B)]).unsqueeze(-1)   # (B, 1)
             r_lens = ent_lens.new_ones(B)   # (B, )
             preds = model.test_tail_pred(ent_batch, r_batch, all_concept_embs, ent_lens, r_lens)  # (B, cep_cnt)
-            MAP_b, MRR_b, P1_b, P3_b, P10_b = cal_CGC_metrics(preds, gold_ceps_batch)
+            MAP_b, MRR_b, P1_b, P3_b, P10_b = cal_CGC_metrics(preds, gold_ceps_batch, descending)
             MAP.extend(MAP_b)
             MRR.extend(MRR_b)
             P1.extend(P1_b)
@@ -116,7 +117,7 @@ def test_CGC_task(model: th.nn.Module, cg_iter: DataLoader, tok_vocab: dict,
 
 def test_OLP_task(model: th.nn.Module, oie_iter: DataLoader, tok_vocab: dict,
                   mention_vocab: dict, rel_vocab: dict, device: th.device,
-                  all_oie_triples_map: dict) -> tuple:
+                  all_oie_triples_map: dict, descending: bool) -> tuple:
     all_mentions, all_mention_lens = get_concept_tok_tensor(mention_vocab, tok_vocab)
     all_mentions = all_mentions.to(device)
     all_mention_embs = model._get_composition_emb(all_mentions, all_mention_lens, model.mention_func)
@@ -134,14 +135,16 @@ def test_OLP_task(model: th.nn.Module, oie_iter: DataLoader, tok_vocab: dict,
             r_batch = r_batch.to(device)
             t_batch = t_batch.to(device)
             pred_tails = model.test_tail_pred(h_batch, r_batch, all_mention_embs, h_lens, r_lens)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, h_mids, r_rids, t_mids, True, all_oie_triples_map)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, h_mids, r_rids, t_mids,
+                                                         True, all_oie_triples_map, descending)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
             Hits50 += H50_b
             # head pred
             pred_heads = model.test_head_pred(t_batch, r_batch, all_mention_embs, t_lens, r_lens)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, h_mids, r_rids, t_mids, False, all_oie_triples_map)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, h_mids, r_rids, t_mids,
+                                                         False, all_oie_triples_map, descending)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
@@ -188,7 +191,12 @@ def main(opt, _run, _log):
     _log.info('corpus=%s, #Tok=%d, #Mention=%d, #Rel=%d, #Concept=%d' % (opt['dataset_type'], len(tok_vocab),
               len(mention_vocab), len(rel_vocab), len(concept_vocab)))
     # Build model
-    model = OpenTransE(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
+    if opt['model_type'] == 'TransE':
+        model = OpenTransE(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
+        descending = False
+    elif opt['model_type'] == 'DistMult':
+        model = OpenDistMult(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
+        descending = True
     if opt['pretrain_tok_emb'] != '':
         model.init_tok_emb_by_pretrain(tok_vocab, opt['pretrain_tok_emb'])
         _log.info('[%s] model token embedding init by %s' % (time.ctime(), opt['pretrain_tok_emb']))
@@ -210,7 +218,7 @@ def main(opt, _run, _log):
             r_batch = r_batch.to(device)
             t_batch = t_batch.to(device)
             pos_scores, neg_scores = model(h_batch, r_batch, t_batch, h_lens, r_lens, t_lens)
-            target = h_batch.new_tensor([-1])
+            target = h_batch.new_tensor([-1]) if opt['model_type'] == 'TransE' else h_batch.new_tensor([1])
             loss = criterion(pos_scores, neg_scores, target)
             train_loss.append(loss.item())
             loss.backward()
@@ -222,7 +230,7 @@ def main(opt, _run, _log):
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
             model.eval()
-            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(model, dev_cg_iter, tok_vocab, concept_vocab, device)
+            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(model, dev_cg_iter, tok_vocab, concept_vocab, device, descending)
             _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
             _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
             _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
@@ -230,7 +238,7 @@ def main(opt, _run, _log):
             _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
             _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), i_epoch, MAP, CGC_MRR, P1, P3, P10))
             OLP_MRR, H10, H30, H50 = test_OLP_task(model, dev_oie_iter, tok_vocab, mention_vocab,
-                                                   rel_vocab, device, all_oie_triples_map)
+                                                   rel_vocab, device, all_oie_triples_map, descending)
             _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
             _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
             _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
@@ -248,7 +256,7 @@ def main(opt, _run, _log):
     model.load_state_dict(checkpoint)
     model = model.to(device)
     model.eval()
-    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(model, test_cg_iter, tok_vocab, concept_vocab, device)
+    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(model, test_cg_iter, tok_vocab, concept_vocab, device, descending)
     _run.log_scalar("test.CGC.MAP", MAP)
     _run.log_scalar("test.CGC.MRR", CGC_MRR)
     _run.log_scalar("test.CGC.P@1", P1)
@@ -256,7 +264,7 @@ def main(opt, _run, _log):
     _run.log_scalar("test.CGC.P@10", P10)
     _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
     OLP_MRR, H10, H30, H50 = test_OLP_task(model, test_oie_iter, tok_vocab, mention_vocab,
-                                           rel_vocab, device, all_oie_triples_map)
+                                           rel_vocab, device, all_oie_triples_map, descending)
     _run.log_scalar("test.OLP.MRR", OLP_MRR)
     _run.log_scalar("test.OLP.Hits@10", H10)
     _run.log_scalar("test.OLP.Hits@30", H30)
