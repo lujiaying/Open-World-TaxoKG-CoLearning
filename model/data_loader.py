@@ -3,11 +3,12 @@ Data Loaders for CGC-OLP-BENCH
 Author: Jiaying Lu
 Create Date: Jul 14, 2021
 """
-import random
 from collections import defaultdict
 from typing import Tuple, Dict, List
+from enum import Enum
 
 import tqdm
+import numpy as np
 import torch as th
 from torch.utils import data
 from allennlp.common.util import pad_sequence_to_length
@@ -616,6 +617,14 @@ def get_concept_vocab(cg_pairs_train: dict, cg_pairs_dev: dict, cg_pairs_test: d
     return concept_vocab
 
 
+def get_CGC_ent_vocab(cg_pairs: dict) -> Dict[str, int]:
+    ent_vocab = {}
+    for ent in cg_pairs:
+        if ent not in ent_vocab:
+            ent_vocab[ent] = len(ent_vocab)
+    return ent_vocab
+
+
 def get_tok_vocab(cg_triples_train: list, oie_triples_train: list) -> Dict[str, int]:
     """
     Tokens only from train set
@@ -776,6 +785,177 @@ def prepare_ingredients_CompGCN(dataset_dir: str) -> tuple:
     test_OLP_set = CompGCNOLPTripleDst(oie_triples_test, mention_vocab, edge_vocab)
     return (train_set, dev_CGC_set, test_CGC_set, dev_OLP_set, test_OLP_set,
             tok_vocab, node_vocab, edge_vocab, mention_vocab, concept_vocab, all_triple_ids_map)
+
+
+class BatchType(Enum):
+    HEAD_BATCH = 0    # corrupted head
+    TAIL_BATCH = 1    # corrupted tail
+    SINGLE = 2        # for non-corrupted triple batch
+
+
+class HAKETrainDst(data.Dataset):
+    """
+    Adapted from https://github.com/MIRALab-USTC/KGE-HAKE/blob/master/codes/data.py#L62
+    """
+    def __init__(self, triples: List[Tuple[str, str, str]],
+                 mention_vocab: dict, rel_vocab: dict,
+                 neg_size: int, batch_type: BatchType):
+        self.triples = []
+        for s, r, o in triples:
+            sid = mention_vocab[s]
+            rid = rel_vocab[r]
+            oid = mention_vocab[o]
+            self.triples.append((sid, rid, oid))
+        self.len = len(self.triples)
+        self.num_entity = len(mention_vocab)
+        self.num_relation = len(rel_vocab)
+        self.neg_size = neg_size
+        self.batch_type = batch_type
+
+        # hr,tr_map for valid negative sampling
+        # hr,tr_freq for calculating sampling weight
+        self.hr_map, self.tr_map, self.hr_freq, self.tr_freq = self.two_tuple_count()
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, idx: int) -> tuple:
+        pos_triple = self.triples[idx]
+        head, rel, tail = pos_triple
+        subsampling_weight = self.hr_freq[(head, rel)] + self.tr_freq[(tail, rel)]
+        subsampling_weight = th.sqrt(1 / th.Tensor([subsampling_weight]))  # scalar
+
+        neg_triples = []
+        neg_size = 0
+        while neg_size < self.neg_size:
+            neg_triples_tmp = np.random.randint(self.num_entity, size=self.neg_size * 2)
+            if self.batch_type == BatchType.HEAD_BATCH:
+                mask = np.in1d(
+                    neg_triples_tmp,
+                    self.tr_map[(tail, rel)],
+                    assume_unique=True,
+                    invert=True
+                )
+            elif self.batch_type == BatchType.TAIL_BATCH:
+                mask = np.in1d(
+                    neg_triples_tmp,
+                    self.hr_map[(head, rel)],
+                    assume_unique=True,
+                    invert=True
+                )
+            else:
+                raise ValueError('Invalid BatchType: {}'.format(self.batch_type))
+            neg_triples_tmp = neg_triples_tmp[mask]
+            neg_triples.append(neg_triples_tmp)
+            neg_size += neg_triples_tmp.size
+        neg_triples = np.concatenate(neg_triples)[:self.neg_size]
+        pos_triple = th.LongTensor(pos_triple)
+        neg_triples = th.from_numpy(neg_triples)
+        return pos_triple, neg_triples, subsampling_weight, self.batch_type
+
+    @staticmethod
+    def collate_fn(data):
+        positive_sample = th.stack([_[0] for _ in data], dim=0)
+        negative_sample = th.stack([_[1] for _ in data], dim=0)
+        subsample_weight = th.cat([_[2] for _ in data], dim=0)
+        batch_type = data[0][3]
+        return positive_sample, negative_sample, subsample_weight, batch_type
+
+    def two_tuple_count(self):
+        """
+        Return two dict:
+        dict({(h, r): [t1, t2, ...]}),
+        dict({(t, r): [h1, h2, ...]}),
+        """
+        hr_map = {}
+        hr_freq = {}
+        tr_map = {}
+        tr_freq = {}
+
+        init_cnt = 3
+        for head, rel, tail in self.triples:
+            if (head, rel) not in hr_map.keys():
+                hr_map[(head, rel)] = set()
+
+            if (tail, rel) not in tr_map.keys():
+                tr_map[(tail, rel)] = set()
+
+            if (head, rel) not in hr_freq.keys():
+                hr_freq[(head, rel)] = init_cnt
+
+            if (tail, rel) not in tr_freq.keys():
+                tr_freq[(tail, rel)] = init_cnt
+
+            hr_map[(head, rel)].add(tail)
+            tr_map[(tail, rel)].add(head)
+            hr_freq[(head, rel)] += 1
+            tr_freq[(tail, rel)] += 1
+
+        for key in tr_map.keys():
+            tr_map[key] = np.array(list(tr_map[key]))
+
+        for key in hr_map.keys():
+            hr_map[key] = np.array(list(hr_map[key]))
+
+        return hr_map, tr_map, hr_freq, tr_freq
+
+
+def prepare_ingredients_HAKE(dataset_dir: str, neg_size: int) -> tuple:
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
+    # concept vocab as CGC test pool
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    # Load Open KG
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
+    # get mention/rel vocab from all entity, concept, subj, obj in train
+    train_mention_vocab = {}
+    train_rel_vocab = {TAXO_EDGE: 0}
+    for ent, ceps in cg_pairs_train.items():
+        if ent not in train_mention_vocab:
+            train_mention_vocab[ent] = len(train_mention_vocab)
+        for cep in ceps:
+            if cep not in train_mention_vocab:
+                train_mention_vocab[cep] = len(train_mention_vocab)
+    for subj, rel, obj in oie_triples_train:
+        if subj not in train_mention_vocab:
+            train_mention_vocab[subj] = len(train_mention_vocab)
+        if obj not in train_mention_vocab:
+            train_mention_vocab[obj] = len(train_mention_vocab)
+        if rel not in train_rel_vocab:
+            train_rel_vocab[rel] = len(train_rel_vocab)
+    all_triples_train = cg_triples_train + oie_triples_train
+    train_set_head_batch = HAKETrainDst(all_triples_train, train_mention_vocab, train_rel_vocab,
+                                        neg_size, BatchType.HEAD_BATCH)
+    train_set_tail_batch = HAKETrainDst(all_triples_train, train_mention_vocab, train_rel_vocab,
+                                        neg_size, BatchType.TAIL_BATCH)
+    # CGC val, test set
+    dev_cg_set = CGCPairsDst(cg_pairs_dev, tok_vocab, concept_vocab)
+    test_cg_set = CGCPairsDst(cg_pairs_test, tok_vocab, concept_vocab)
+    # OLP mention pool for test (collect from train/dev/test)
+    all_mention_vocab, all_rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    dev_olp_set = CompGCNOLPTripleDst(oie_triples_dev, all_mention_vocab, all_rel_vocab)
+    test_olp_set = CompGCNOLPTripleDst(oie_triples_test, all_mention_vocab, all_rel_vocab)
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for OLP filtered eval setting
+    for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        all_triple_ids_map['h'][(all_mention_vocab[h], all_rel_vocab[r])].add(all_mention_vocab[t])
+        all_triple_ids_map['t'][(all_mention_vocab[t], all_rel_vocab[r])].add(all_mention_vocab[h])
+    return (train_set_head_batch, train_set_tail_batch,
+            dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,
+            concept_vocab, tok_vocab, train_mention_vocab, train_rel_vocab,
+            all_mention_vocab, all_rel_vocab, all_triple_ids_map)
 
 
 if __name__ == '__main__':
