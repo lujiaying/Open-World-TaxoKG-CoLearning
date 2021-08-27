@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_OpenTransE
+#SBATCH --output=logs/slurm_OpenHAKE
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -178,8 +178,22 @@
 #    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-python -m scripts.train_opentransE with 'motivation="DistMult"'\
-   'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
-   'opt.model_type="DistMult"' 'opt.emb_dim=200'\
-   'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
-   'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+#    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
+#    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
+
+# Aug 25
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.epoch=750'
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.epoch=750'
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=300'
+# python -m scripts.train_openHAKE with 'motivation="trial"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=300'
