@@ -48,8 +48,8 @@ def test_model(config_path, checkpoint_path, _run, _log):
     th.manual_seed(opt['seed'])
     # Set up
     dataset_dir = opt['dataset_dir'][opt['dataset_type']]
-    # device = th.device('cuda') if opt['gpu'] else th.device('cpu')
-    device = th.device('cpu')
+    device = th.device('cuda') if opt['gpu'] else th.device('cpu')
+    # device = th.device('cpu')
     # Load corpus
     train_set_head_batch, train_set_tail_batch,\
         dev_cg_set, test_cg_set, dev_olp_set, test_olp_set, concept_vocab,\

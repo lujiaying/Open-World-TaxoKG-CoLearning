@@ -500,7 +500,8 @@ def load_cg_pairs(fpath: str) -> Dict[str, set]:
         for line in fopen:
             line_list = line.strip().split('\t')
             ent, concepts = line_list[0], line_list[1:]
-            concept_pairs[ent] = concepts
+            # concept_pairs[ent] = concepts   # just changed
+            concept_pairs[ent] = set(concepts)
     return concept_pairs
 
 

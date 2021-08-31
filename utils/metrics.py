@@ -1,3 +1,5 @@
+import random
+from typing import Dict
 import torch as th
 
 
@@ -41,6 +43,7 @@ def cal_reciprocal_rank(actual: list, pred: list) -> float:
     for i, p in enumerate(pred):
         if p in actual:
             return 1.0 / (i+1.0)
+    return 0.0
 
 
 def cal_OLP_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
@@ -57,7 +60,10 @@ def cal_OLP_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
             ents_to_ignore = list(all_oie_triples_map['t'][(t, r)])
             if h in ents_to_ignore:
                 ents_to_ignore.remove(h)
-    preds = th.where(preds_to_ignore > 0.0, preds_to_ignore, preds)
+        preds_to_ignore[i][ents_to_ignore] = 5.0
+    fill_value = 0.0 if descending is True else 1e+100
+    fill_value = preds.new_tensor(fill_value)
+    preds = th.where(preds_to_ignore > 0.0, fill_value, preds)
     preds_idx = preds.argsort(dim=1, descending=descending)   # B*ent_c, ascending since it is distance
     # cal metrics
     """
@@ -91,6 +97,35 @@ def cal_OLP_metrics(preds: th.Tensor, h_mids: list, r_rids: list, t_mids: list,
     Hits50 = th.where(preds_idx[:, :50] == ground_truth, one_tensor, zero_tensor).sum().item()
     MRR = (1.0 / (preds_idx == ground_truth).nonzero(as_tuple=False)[:, 1].float().add(1.0)).sum().item()
     return MRR, Hits10, Hits30, Hits50
+
+
+def cal_OLP_metrics_nontensor(preds: Dict[str, float], h: str, r: str, t: str,
+                              is_tail_pred: bool, all_oie_triples_map: dict) -> tuple:
+    """
+    Non tensor version for calculating metrics
+    preds store validity score, the bigger the better.
+    """
+    if is_tail_pred:
+        gold = t
+        ents_to_ignore = all_oie_triples_map['h'][(h, r)]
+        if t in ents_to_ignore:
+            ents_to_ignore.remove(t)
+    else:
+        gold = h
+        ents_to_ignore = all_oie_triples_map['t'][(t, r)]
+        if h in ents_to_ignore:
+            ents_to_ignore.remove(h)
+    for ent in ents_to_ignore:
+        preds[ent] = 0.0
+    preds = [(k, v) for k, v in preds.items()]
+    random.shuffle(preds)
+    preds = sorted(preds, key=lambda _: -_[1])
+    preds = [_[0] for _ in preds]
+    RR = cal_reciprocal_rank([gold], preds)
+    h10 = 1.0 if gold in preds[:10] else 0.0
+    h30 = 1.0 if gold in preds[:30] else 0.0
+    h50 = 1.0 if gold in preds[:50] else 0.0
+    return RR, h10, h30, h50
 
 
 if __name__ == '__main__':

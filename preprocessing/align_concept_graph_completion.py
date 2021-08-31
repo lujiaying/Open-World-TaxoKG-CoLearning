@@ -655,3 +655,12 @@ if __name__ == '__main__':
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
     # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich-OPIEC')
+
+    # Benchmark Stat
+    benchmark_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
+    benchmark_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
+    benchmark_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
+    oie_path = '%s/oie_triples.train.txt' % (benchmark_dir)
+    oie_path = '%s/oie_triples.dev.txt' % (benchmark_dir)
+    oie_path = '%s/oie_triples.test.txt' % (benchmark_dir)
+    # analysis_openie_triples(oie_path)

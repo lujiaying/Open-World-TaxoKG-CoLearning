@@ -185,15 +185,15 @@
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
 
 # Aug 25
+# python -m scripts.train_openHAKE with 'motivation="OPIEC Re-Run"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.epoch=500'
+# python -m scripts.train_openHAKE with 'motivation="OPIEC Re-Run"'\
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.epoch=500'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'
+#     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.epoch=550'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'
+#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.epoch=550'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.epoch=750'
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=200'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.epoch=750'
-# python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=300'
-# python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=300'
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'
