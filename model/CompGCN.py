@@ -15,13 +15,14 @@ PAD_idx = 0
 
 
 class CompGCNLayer(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, dropout: float):
+    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str):
         super(CompGCNLayer, self).__init__()
         self.W_O = nn.Linear(in_dim, out_dim)     # for original relations
         self.W_I = nn.Linear(in_dim, out_dim)     # for inverse relations
         self.W_S = nn.Linear(in_dim, out_dim)     # for self-loop
         self.dropout = nn.Dropout(dropout)
         self.bn = nn.BatchNorm1d(out_dim)
+        self.comp_opt = comp_opt
 
     def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
         """
@@ -31,10 +32,19 @@ class CompGCNLayer(nn.Module):
         graphs.ndata['h'] = node_embs
         graphs.edata['h'] = edge_embs
         graphs_reverse = dgl.reverse(graphs, copy_ndata=True, copy_edata=True)
-        graphs.update_all(fn.u_sub_e('h', 'h', 'm'),
-                          fn.mean('m', 'ho'))
-        graphs_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
-                                  fn.mean('m', 'hi'))
+        if self.comp_opt == 'TransE':
+            graphs.update_all(fn.u_sub_e('h', 'h', 'm'),
+                              fn.mean('m', 'ho'))
+            graphs_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                      fn.mean('m', 'hi'))
+        elif self.comp_opt == 'DistMult':
+            graphs.update_all(fn.u_mul_e('h', 'h', 'm'),
+                              fn.mean('m', 'ho'))
+            graphs_reverse.update_all(fn.u_mul_e('h', 'h', 'm'),
+                                      fn.mean('m', 'hi'))
+        else:
+            print('invalid comp_opt for CompGCN Layer')
+            exit(-1)
         h = 1/3 * self.dropout(self.W_O(graphs.ndata['ho']))\
             + 1/3 * self.dropout(self.W_I(graphs_reverse.ndata['hi']))\
             + 1/3 * self.W_S(node_embs)  # (n_cnt, out_dim)
@@ -45,6 +55,10 @@ class CompGCNLayer(nn.Module):
 class CompGCNTransE(nn.Module):
     def __init__(self, in_emb_dim: int, gcn_emb_dim: int, dropout: float, gcn_dropout: float,
                  norm: int, gamma: float, gcn_layer: int, score_func: str = 'TransE'):
+        """
+        Args:
+            score_func: str, used for both composition operator and score function
+        """
         super(CompGCNTransE, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         self.norm = norm    # norm for (h+r-t), could be 1 or 2
@@ -52,9 +66,9 @@ class CompGCNTransE(nn.Module):
         self.score_func = score_func
         self.gcn_layer = gcn_layer
         # CompGCN-TransE only 1 GCN layer
-        self.gnn1 = CompGCNLayer(in_emb_dim, gcn_emb_dim, gcn_dropout)
+        self.gnn1 = CompGCNLayer(in_emb_dim, gcn_emb_dim, gcn_dropout, score_func)
         self.W_rel1 = nn.Linear(in_emb_dim, gcn_emb_dim)   # for edges, no activation
-        self.gnn2 = CompGCNLayer(gcn_emb_dim, gcn_emb_dim, gcn_dropout) if gcn_layer == 2 else None
+        self.gnn2 = CompGCNLayer(gcn_emb_dim, gcn_emb_dim, gcn_dropout, score_func) if gcn_layer == 2 else None
         self.W_rel2 = nn.Linear(gcn_emb_dim, gcn_emb_dim) if gcn_layer == 2 else None
 
     def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor,

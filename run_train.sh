@@ -129,7 +129,7 @@
 #      'opt.OLP_2hop_egograph=False'
 
 # Aug 8
-# python -m scripts.train_CompGCN with 'motivation="DistMult add loss.backward"'\
+# python -m scripts.train_CompGCN with 'motivation="DistMult; comp opt, data ReRun"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'\
 #     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
 # python -m scripts.train_CompGCN with 'motivation="TransE default param"'\
@@ -137,9 +137,9 @@
 # python -m scripts.train_CompGCN with 'motivation="DistMult"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
 #     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
-# python -m scripts.train_CompGCN with 'motivation="default hparams"'\
-#     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
-#     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
+python -m scripts.train_CompGCN with 'motivation="DistMult; comp opt, data ReRun"'\
+    'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
+    'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
 # python -m scripts.train_CompGCN with 'motivation="DistMult"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
 #     'opt.score_func="DistMult"' 'opt.gcn_layer=2' 'opt.gcn_emb_dim=150'
@@ -158,27 +158,27 @@
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
-# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, opt ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult; comp_opt,dataset ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
@@ -193,7 +193,7 @@
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.epoch=550'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.epoch=550'
-# python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=200'
+python -m scripts.train_openHAKE with 'motivation="OPIEC Re-Run"'\
+    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=200'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
 #     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'

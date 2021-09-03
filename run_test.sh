@@ -36,3 +36,7 @@
 #     'checkpoint_path="checkpoints/OpenHAKE/exp_4_SEMusic-ReVerb.best.ckpt"'
 # python -m scripts.test_openHAKE with 'config_path="logs/open-HAKE/5/config.json"'\
 #     'checkpoint_path="checkpoints/OpenHAKE/exp_5_MSCG-OPIEC.best.ckpt"'
+# python -m scripts.test_openHAKE with 'config_path="logs/open-HAKE/8/config.json"'\
+#     'checkpoint_path="checkpoints/OpenHAKE/exp_8_SEMedical-OPIEC.best.ckpt"'
+# python -m scripts.test_openHAKE with 'config_path="logs/open-HAKE/7/config.json"'\
+#     'checkpoint_path="checkpoints/OpenHAKE/exp_7_SEMusic-OPIEC.best.ckpt"'

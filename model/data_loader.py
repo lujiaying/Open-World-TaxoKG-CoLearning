@@ -6,6 +6,7 @@ Create Date: Jul 14, 2021
 from collections import defaultdict
 from typing import Tuple, Dict, List
 from enum import Enum
+import random
 
 import tqdm
 import numpy as np
@@ -739,6 +740,114 @@ def prepare_ingredients_TaxoRelGraph(dataset_dir: str, phrase_max_len: int, OLP_
                                   mention_vocab, rel_vocab, phrase_max_len, OLP_2hop_egograph)
     return (train_CGC_set, dev_CGC_set, test_CGC_set, train_OLP_set, dev_OLP_set, test_OLP_set,
             tok_vocab, mention_vocab, concept_vocab, rel_vocab, all_triple_ids_map)
+
+
+def get_rv_for_u(cg_pairs_train: Dict[str, set], oie_triples_train: list[str, str, str]) -> Tuple[dict]:
+    u_rv_dict = defaultdict(set)
+    v_ru_dict = defaultdict(set)
+    for ent, ceps in cg_pairs_train.items():
+        for cep in ceps:
+            u_rv_dict[ent].add((TAXO_EDGE, cep))
+            v_ru_dict[cep].add((TAXO_EDGE, ent))
+    for s, r, o in oie_triples_train:
+        u_rv_dict[s].add((r, o))
+        v_ru_dict[o].add((r, s))
+    return u_rv_dict, v_ru_dict
+
+
+def get_uv_for_r(oie_triples_train: list[str, str, str]) -> Dict[str, set]:
+    r_uv_dict = defaultdict(dict)
+    for s, r, o in oie_triples_train:
+        r_uv_dict[r].add((s, o))
+    return r_uv_dict
+
+
+class LTGDst(data.Dataset):
+    def __init__(self, triples: List[Tuple[str, str, str]], tok_vocab: dict, max_len: int,
+                 u_rv_dict: dict, v_ru_dict: dict, r_uv_dict: dict,
+                 graph_sample_prob: float):
+        self.triples = []
+        self.neigh_sample_prob = neigh_sample_prob
+        self.max_neigh_cnt = max_neigh_cnt
+        for s, r, o in tqdm.tqdm(triples):
+            # build ego graph for subj, obj
+            subj_nxg = self.create_ent_ego_graph(s, (s, r, o), u_rv_dict, v_ru_dict)
+            subj_g, subj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(subj_nxg, s, tok_vocab)
+            subj_node_toks, subj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(subj_node_tids, max_len)
+            obj_nxg = self.create_ent_ego_graph(o, (s, r, o), u_rv_dict, v_ru_dict)
+            obj_g, obj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(obj_nxg, o, tok_vocab)
+            obj_node_toks, obj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(obj_node_tids, max_len)
+            # build ego graph for rel
+            # TODO:
+
+    def create_ent_ego_graph(self, ent: str, triple_to_remove: tuple, u_rv_dict: dict, v_ru_dict: dict) -> nx.DiGraph():
+        DG = nx.DiGraph()
+        # one-hop neighbours
+        edges = set()
+        for (r, v) in u_rv_dict[ent]:
+            edges.add((ent, r, v))
+        for (r, u) in v_ru_dict[ent]:
+            edges.add((u, r, ent))
+        edges.discard(triple_to_remove)   # can not contain triple of interest
+        one_hop_neighbours = set([_[0] for _ in edges] + [_[2] for _ in edges])
+        one_hop_neighbours.discard(ent)
+        # two-hop neighbours
+        for n in one_hop_neighbours:
+            for (r, v) in u_rv_dict[n]:
+                edges.add((n, r, v))
+            for (r, u) in v_ru_dict[n]:
+                edges.add((u, r, n))
+        edges.discard(triple_to_remove)
+        # build graph
+        if len(edges) > 0:
+            DG.add_edges_from(edges)
+        else:
+            DG.add_node(ent)
+        return DG
+
+    def __getitem__(self, idx: int) -> tuple:
+        # conduct graph sampling if needed
+        # TODO: test
+        return 
+
+
+def prepare_ingredients_LTG(dataset_dir: str) -> tuple:
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    # Load Open KG
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    tok_vocab = get_tok_vocab(cg_pairs_to_cg_triples(cg_pairs_train), oie_triples_train)
+    # get mention/rel vocab from all entity, concept, subj, obj in train
+    train_mention_vocab = {}
+    train_rel_vocab = {TAXO_EDGE: 0}
+    for ent, ceps in cg_pairs_train.items():
+        if ent not in train_mention_vocab:
+            train_mention_vocab[ent] = len(train_mention_vocab)
+        for cep in ceps:
+            if cep not in train_mention_vocab:
+                train_mention_vocab[cep] = len(train_mention_vocab)
+    for subj, rel, obj in oie_triples_train:
+        if subj not in train_mention_vocab:
+            train_mention_vocab[subj] = len(train_mention_vocab)
+        if obj not in train_mention_vocab:
+            train_mention_vocab[obj] = len(train_mention_vocab)
+        if rel not in train_rel_vocab:
+            train_rel_vocab[rel] = len(train_rel_vocab)
+    # collect neighbour info
+    u_rv_dict, v_ru_dict = get_rv_for_u(cg_pairs_train, oie_triples_train)
+    r_uv_dict = get_uv_for_r(oie_triples_train)   # not include ent-cep pairs
+
 
 
 def prepare_ingredients_CompGCN(dataset_dir: str) -> tuple:
