@@ -762,23 +762,24 @@ def get_uv_for_r(oie_triples_train: list[str, str, str]) -> Dict[str, set]:
     return r_uv_dict
 
 
-class LTGDst(data.Dataset):
-    def __init__(self, triples: List[Tuple[str, str, str]], tok_vocab: dict, max_len: int,
-                 u_rv_dict: dict, v_ru_dict: dict, r_uv_dict: dict,
-                 graph_sample_prob: float):
+class HAKEGCNDst(data.Dataset):
+    def __init__(self, triples: List[Tuple[str, str, str]], tok_vocab: dict, max_tlen: int,
+                 u_rv_dict: dict, v_ru_dict: dict, graph_sample_prob: float):
         self.triples = []
-        self.neigh_sample_prob = neigh_sample_prob
-        self.max_neigh_cnt = max_neigh_cnt
+        self.graph_sample_prob = graph_sample_prob
         for s, r, o in tqdm.tqdm(triples):
             # build ego graph for subj, obj
             subj_nxg = self.create_ent_ego_graph(s, (s, r, o), u_rv_dict, v_ru_dict)
             subj_g, subj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(subj_nxg, s, tok_vocab)
-            subj_node_toks, subj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(subj_node_tids, max_len)
+            subj_node_toks, subj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(subj_node_tids, max_tlen)
             obj_nxg = self.create_ent_ego_graph(o, (s, r, o), u_rv_dict, v_ru_dict)
             obj_g, obj_node_tids = OLPEgoGraphDst.networkx_to_dgl_graph(obj_nxg, o, tok_vocab)
-            obj_node_toks, obj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(obj_node_tids, max_len)
-            # build ego graph for rel
-            # TODO:
+            obj_node_toks, obj_node_tlens = OLPEgoGraphDst.tids_list_to_tensor(obj_node_tids, max_tlen)
+            r_tids = [tok_vocab.get(_, UNK_idx) for _ in r.split(' ')]
+            r_toks = pad_sequence_to_length(r_tids, max_tlen, lambda: PAD_idx)
+            r_tlen = len(r_tids)
+            self.triples.add((s, r, o), subj_g, subj_node_toks, subj_node_tlens,
+                             r_toks, r_tlen, obj_g, obj_node_toks, obj_node_tlens)
 
     def create_ent_ego_graph(self, ent: str, triple_to_remove: tuple, u_rv_dict: dict, v_ru_dict: dict) -> nx.DiGraph():
         DG = nx.DiGraph()
@@ -807,16 +808,33 @@ class LTGDst(data.Dataset):
 
     def __getitem__(self, idx: int) -> tuple:
         # conduct graph sampling if needed
-        # TODO: test
-        return 
+        if self.graph_sample_prob <= 0.0:
+            return self.triples[idx]
+        else:
+            ((s, r, o), subj_g, subj_node_toks, subj_node_tlens,
+             r_toks, r_tlen, obj_g, obj_node_toks, obj_node_tlens) = self.triples[idx]
+            subj_nmask = th.rand(subj_g.num_nodes()) >= self.graph_sample_prob
+            subj_nmask[0] = True     # always keep ego node
+            subj_g = dgl.node_subgraph(subj_g, subj_nmask)
+            subj_node_toks = subj_node_toks[subj_nmask]
+            subj_node_tlens = subj_node_tlens[subj_nmask]
+            # TODO: test whether mask works
+            return ((s, r, o), subj_g, subj_node_toks, subj_node_tlens,
+                    r_toks, r_tlen, obj_g, obj_node_toks, obj_node_tlens)
 
 
-def prepare_ingredients_LTG(dataset_dir: str) -> tuple:
+def prepare_ingredients_HAKEGCN(dataset_dir: str, max_tlen: int, graph_sample_prob: float) -> tuple:
+    """
+    Proposed Model that extend HAKE with GCN
+    Args:
+        graph_sample_prob: 0 means no sampling; otherwise means prob to drop node in graph
+    """
     # Load Concept Graph
     cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
     cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
     cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
     cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
     cg_pairs_dev = load_cg_pairs(cg_dev_path)
     cg_pairs_test = load_cg_pairs(cg_test_path)
     concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
@@ -827,7 +845,7 @@ def prepare_ingredients_LTG(dataset_dir: str) -> tuple:
     oie_triples_train = load_oie_triples(oie_train_path)
     oie_triples_dev = load_oie_triples(oie_dev_path)
     oie_triples_test = load_oie_triples(oie_test_path)
-    tok_vocab = get_tok_vocab(cg_pairs_to_cg_triples(cg_pairs_train), oie_triples_train)
+    tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
     # get mention/rel vocab from all entity, concept, subj, obj in train
     train_mention_vocab = {}
     train_rel_vocab = {TAXO_EDGE: 0}
@@ -846,8 +864,10 @@ def prepare_ingredients_LTG(dataset_dir: str) -> tuple:
             train_rel_vocab[rel] = len(train_rel_vocab)
     # collect neighbour info
     u_rv_dict, v_ru_dict = get_rv_for_u(cg_pairs_train, oie_triples_train)
-    r_uv_dict = get_uv_for_r(oie_triples_train)   # not include ent-cep pairs
-
+    # r_uv_dict = get_uv_for_r(oie_triples_train)   # not include ent-cep pairs
+    train_set = HAKEGCNDst(cg_triples_train+oie_triples_train, tok_vocab, max_tlen,
+                           u_rv_dict, v_ru_dict, graph_sample_prob)
+    return train_set
 
 
 def prepare_ingredients_CompGCN(dataset_dir: str) -> tuple:
