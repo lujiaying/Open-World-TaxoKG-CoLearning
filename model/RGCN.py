@@ -15,13 +15,12 @@ PAD_idx = 0
 
 
 class CompGCNLayer(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str, use_bn: bool = True):
+    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str):
         super(CompGCNLayer, self).__init__()
         self.W_O = nn.Linear(in_dim, out_dim)     # for original relations
         self.W_I = nn.Linear(in_dim, out_dim)     # for inverse relations
         self.W_S = nn.Linear(in_dim, out_dim)     # for self-loop
         self.dropout = nn.Dropout(dropout)
-        self.use_bn = use_bn
         self.bn = nn.BatchNorm1d(out_dim)
         self.comp_opt = comp_opt
 
@@ -49,8 +48,7 @@ class CompGCNLayer(nn.Module):
         h = 1/3 * self.dropout(self.W_O(graphs.ndata['ho']))\
             + 1/3 * self.dropout(self.W_I(graphs_reverse.ndata['hi']))\
             + 1/3 * self.W_S(node_embs)  # (n_cnt, out_dim)
-        if self.use_bn:
-            h = self.bn(h)
+        h = self.bn(h)
         return h
 
 

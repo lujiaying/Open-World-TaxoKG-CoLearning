@@ -5,11 +5,13 @@ Create Date: Aug 25, 2021
 """
 from typing import Tuple
 
+import dgl
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .data_loader import BatchType
+from .CompGCN import CompGCNLayer
 
 PAD_idx = 0
 
@@ -78,3 +80,34 @@ class HAKE(nn.Module):
         r_score = th.norm(r_score, dim=2) * self.modulus_weight
         phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
         return self.gamma - (phase_score + r_score)
+
+
+class HAKEGCNEncoder(nn.Module):
+    def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int, gcn_dropout: float, comp_opt: str):
+        """
+        Args:
+            comp_opt: implemented ['TransE', 'DistMult']
+        """
+        super(HAKEGCNEncoder, self).__init__()
+        self.dropout = nn.Dropout(p=in_dropout)
+        self.gnn1 = CompGCNLayer(in_emb_dim, in_emb_dim//2, gcn_dropout, comp_opt, use_bn=False)
+        self.W_edge1 = nn.Linear(in_emb_dim, in_emb_dim//2)   # for edges
+        self.gnn2 = CompGCNLayer(in_emb_dim//2, out_emb_dim, gcn_dropout, comp_opt, use_bn=False)
+
+    def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+        """
+        Args:
+            graphs: (Batch,)
+            node_embs: (all_nodes, in_emb)
+            edge_embs: (all_edges, in_emb)
+        Returns:
+            size = (Batch, gcn_emb)
+        """
+        node_embs = self.dropout(node_embs)
+        edge_embs = self.dropout(edge_embs)
+        node_embs = self.gnn1(graphs, node_embs, edge_embs)
+        edge_embs = self.W_edge1(edge_embs)
+        node_embs = self.gnn2(graphs, F.relu(node_embs), F.relu(edge_embs))
+        g_node_cnts = graphs.batch_num_nodes()   # (B, )
+        central_nids = [0] + g_node_cnts.cumsum(dim=0).tolist()[:-1]
+        return node_embs[central_nids]
