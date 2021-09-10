@@ -199,5 +199,5 @@
 #     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'
 
 # Sep 9
-python -m scripts.train_HAKEGCN with 'motivation="debug"'\
-     'opt.gpu=False' 'opt.dataset_type="SEMedical-OPIEC"'
+python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN default setting"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"'

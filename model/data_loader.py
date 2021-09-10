@@ -702,7 +702,7 @@ def prepare_ingredients_transE(dataset_dir: str) -> tuple:
 def get_concept_tok_tensor(concept_vocab: dict, tok_vocab: dict) -> th.LongTensor:
     concepts = []
     cep_lens = []
-    for cep in concept_vocab.keys():
+    for cep in concept_vocab.keys():   # keys order is as the order they added into dict
         cep_num = [tok_vocab.get(_, UNK_idx) for _ in cep.split(' ')]
         concepts.append(cep_num)
         cep_lens.append(len(cep_num))

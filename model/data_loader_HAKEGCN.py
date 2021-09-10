@@ -17,9 +17,9 @@ from allennlp.common.util import pad_sequence_to_length
 import networkx as nx
 import dgl
 
-from .data_loader import BatchType, PAD_idx, UNK_idx, TAXO_EDGE
+from .data_loader import BatchType, TAXO_EDGE, CompGCNOLPTripleDst, get_mention_rel_vocabs
 from .data_loader import get_rv_for_u, load_cg_pairs, cg_pairs_to_cg_triples, get_concept_vocab
-from .data_loader import load_oie_triples, get_concept_vocab, get_tok_vocab
+from .data_loader import load_oie_triples, get_tok_vocab, CompGCNCGCTripleDst
 
 
 class HAKEGCNDst(data.Dataset):
@@ -322,21 +322,21 @@ def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int
     train_set_tail_batch = HAKEGCNDst(cg_triples_train+oie_triples_train, all_phrase2id, pid_graph_dict,
                                       neg_method, neg_size, train_phraseids, BatchType.TAIL_BATCH,
                                       gsample_method, gsample_prob)
-    return (train_set_head_batch, train_set_tail_batch,
-            tok_vocab, concept_vocab, all_phrase2id, pid_graph_dict)
-
-    """
-    # resources for OLP evaluation
-    # TODO: use all_phrase2id instead
-    all_mention_vocab, all_rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    dev_cg_set = CompGCNCGCTripleDst(cg_pairs_dev, all_phrase2id, all_phrase2id, concept_vocab)
+    test_cg_set = CompGCNCGCTripleDst(cg_pairs_test, all_phrase2id, all_phrase2id, concept_vocab)
+    # resources for olp test
+    olp_ment_vocab, olp_rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    dev_olp_set = CompGCNOLPTripleDst(oie_triples_dev, olp_ment_vocab, all_phrase2id)
+    test_olp_set = CompGCNOLPTripleDst(oie_triples_test, olp_ment_vocab, all_phrase2id)
     all_triple_ids_map = {'h': defaultdict(set),
                           't': defaultdict(set)}  # resources for OLP filtered eval setting
+    # subj/obj use ment_vocab, rel use all_phrase2id; align with olp_set
     for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
-        all_triple_ids_map['h'][(all_mention_vocab[h], all_rel_vocab[r])].add(all_mention_vocab[t])
-        all_triple_ids_map['t'][(all_mention_vocab[t], all_rel_vocab[r])].add(all_mention_vocab[h])
-    return (train_set,
-            tok_vocab, concept_vocab, training_str_triples)
-    """
+        all_triple_ids_map['h'][(olp_ment_vocab[h], all_phrase2id[r])].add(olp_ment_vocab[t])
+        all_triple_ids_map['t'][(olp_ment_vocab[t], all_phrase2id[r])].add(olp_ment_vocab[h])
+    return (train_set_head_batch, train_set_tail_batch, dev_cg_set, test_cg_set,
+            dev_olp_set, test_olp_set, all_triple_ids_map, olp_ment_vocab,
+            tok_vocab, concept_vocab, all_phrase2id, pid_graph_dict)
 
 
 if __name__ == '__main__':
