@@ -7,19 +7,19 @@ Create Date: Sep 8, 2021
 from collections import defaultdict
 from typing import Tuple, Dict, List
 from enum import Enum
+import copy
 import random
 
 import tqdm
 import numpy as np
 import torch as th
 from torch.utils import data
-from allennlp.common.util import pad_sequence_to_length
 import networkx as nx
 import dgl
 
 from .data_loader import BatchType, TAXO_EDGE, CompGCNOLPTripleDst, get_mention_rel_vocabs
 from .data_loader import get_rv_for_u, load_cg_pairs, cg_pairs_to_cg_triples, get_concept_vocab
-from .data_loader import load_oie_triples, get_tok_vocab, CompGCNCGCTripleDst
+from .data_loader import load_oie_triples, get_tok_vocab, CompGCNCGCTripleDst, HAKETrainDst
 
 
 class HAKEGCNDst(data.Dataset):
@@ -28,6 +28,7 @@ class HAKEGCNDst(data.Dataset):
                  batch_type: BatchType, gsample_method: str, gsample_prob: float, ):
         """
         graph sample only for positive triple(subj,obj).
+        This is for many small ego-graphs version.
         """
         self.triples = []
         self.pid_graph_dict = pid_graph_dict
@@ -267,10 +268,11 @@ def construct_ego_graphs_for_all_mentions(cg_pairs_train: dict, oie_triples_trai
     return result, all_phrase2id
 
 
-def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int,
-                                gsample_method: str, gsample_prob: float) -> tuple:
+def prepare_ingredients_HAKEGCN_small_graphs(dataset_dir: str, neg_method: str, neg_size: int,
+                                             gsample_method: str, gsample_prob: float) -> tuple:
     """
-    Proposed Model that extend HAKE with GCN
+    Proposed Model that extend HAKE with GCN.
+    This version build 2-hop ego graphs for each entity. Too time-consuming.
     Args:
     negative sampling strategy
         neg_size: int
@@ -337,6 +339,139 @@ def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int
     return (train_set_head_batch, train_set_tail_batch, dev_cg_set, test_cg_set,
             dev_olp_set, test_olp_set, all_triple_ids_map, olp_ment_vocab,
             tok_vocab, concept_vocab, all_phrase2id, pid_graph_dict)
+
+
+def get_vocab_for_all_phrase(cg_pairs_train: dict, oie_triples_train: list,
+                             cg_pairs_dev: dict, cg_pairs_test: dict,
+                             oie_triples_dev: list, oie_triples_test: list) -> Dict[str, int]:
+    all_phrase2id = {TAXO_EDGE: 0}  # mentions, relations, concepts
+    for ent, ceps in {**cg_pairs_train, **cg_pairs_dev, **cg_pairs_test}.items():
+        if ent not in all_phrase2id:
+            all_phrase2id[ent] = len(all_phrase2id)
+        for cep in ceps:
+            if cep not in all_phrase2id:
+                all_phrase2id[cep] = len(all_phrase2id)
+    for (s, r, o) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        if s not in all_phrase2id:
+            all_phrase2id[s] = len(all_phrase2id)
+        if r not in all_phrase2id:
+            all_phrase2id[r] = len(all_phrase2id)
+        if o not in all_phrase2id:
+            all_phrase2id[o] = len(all_phrase2id)
+    return all_phrase2id
+
+
+def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
+                         cg_pairs_dev: dict, cg_pairs_test: dict,
+                         oie_triples_dev: list, oie_triples_test: list,
+                         all_phrase2id: dict) -> tuple:
+    """
+    Train graph; Test graphs for both dev set and test set.
+    All edges must from train set.
+    Both `ndata/edata['phrid']` use all_phrase2id as vocab;
+    `g_nid_map` stores str-> graph_internal_id.
+    """
+    # train graph
+    train_g_nid_map = {}   # {phrase: nid}
+    u_l = []
+    v_l = []
+    edge_pids = []
+    for ent, ceps in cg_pairs_train.items():
+        if ent not in train_g_nid_map:
+            train_g_nid_map[ent] = len(train_g_nid_map)
+        for cep in ceps:
+            if cep not in train_g_nid_map:
+                train_g_nid_map[cep] = len(train_g_nid_map)
+            u_l.append(train_g_nid_map[ent])
+            v_l.append(train_g_nid_map[cep])
+            edge_pids.append(all_phrase2id[TAXO_EDGE])
+    for (s, r, o) in oie_triples_train:
+        if s not in train_g_nid_map:
+            train_g_nid_map[s] = len(train_g_nid_map)
+        if o not in train_g_nid_map:
+            train_g_nid_map[o] = len(train_g_nid_map)
+        u_l.append(train_g_nid_map[s])
+        v_l.append(train_g_nid_map[o])
+        edge_pids.append(all_phrase2id[r])
+    train_G = dgl.graph((u_l, v_l))
+    node_pids = [[] for _ in range(len(train_g_nid_map))]
+    for node, nid in train_g_nid_map.items():
+        node_pids[nid] = all_phrase2id[node]
+    train_G.ndata['phrid'] = th.LongTensor(node_pids)
+    train_G.edata['phrid'] = th.LongTensor(edge_pids)
+    # test graph; only add disconnected nodes
+    test_g_nid_map = copy.deepcopy(train_g_nid_map)
+    for ent, ceps in {**cg_pairs_dev, **cg_pairs_test}.items():
+        if ent not in test_g_nid_map:
+            test_g_nid_map[ent] = len(test_g_nid_map)
+        for cep in ceps:
+            if cep not in test_g_nid_map:
+                test_g_nid_map[cep] = len(test_g_nid_map)
+    for (s, r, o) in (oie_triples_dev + oie_triples_test):
+        if s not in test_g_nid_map:
+            test_g_nid_map[s] = len(test_g_nid_map)
+        if o not in test_g_nid_map:
+            test_g_nid_map[o] = len(test_g_nid_map)
+    added_node_cnt = len(test_g_nid_map) - len(train_g_nid_map)
+    test_G = dgl.add_nodes(train_G, added_node_cnt)
+    node_pids = [[] for _ in range(len(test_g_nid_map))]
+    for node, nid in test_g_nid_map.items():
+        node_pids[nid] = all_phrase2id[node]
+    test_G.ndata['phrid'] = th.LongTensor(node_pids)
+    return ((train_G, train_g_nid_map), (test_G, test_g_nid_map))
+
+
+def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int) -> tuple:
+    """
+    Two big graphs for trian/dev/test sets.
+    For dev and test graphs, edges still from train set, but adds nodes.
+    """
+    # Load Concept Graph
+    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+    cg_pairs_train = load_cg_pairs(cg_train_path)
+    cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
+    cg_pairs_dev = load_cg_pairs(cg_dev_path)
+    cg_pairs_test = load_cg_pairs(cg_test_path)
+    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    # Load Open KG
+    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+    oie_triples_train = load_oie_triples(oie_train_path)
+    oie_triples_dev = load_oie_triples(oie_dev_path)
+    oie_triples_test = load_oie_triples(oie_test_path)
+    tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
+    # resources
+    all_phrase2id = get_vocab_for_all_phrase(cg_pairs_train, oie_triples_train,
+                                             cg_pairs_dev, cg_pairs_test,
+                                             oie_triples_dev, oie_triples_test)
+    ((train_G, train_g_nid_map), (test_G, test_g_nid_map)) = \
+        construct_big_graphs(cg_pairs_train, oie_triples_train, cg_pairs_dev, cg_pairs_test,
+                             oie_triples_dev, oie_triples_test, all_phrase2id)
+    all_triples_train = cg_triples_train + oie_triples_train
+    train_set_head_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
+                                        neg_size, BatchType.HEAD_BATCH)
+    train_set_tail_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
+                                        neg_size, BatchType.TAIL_BATCH)
+    # resource for cgc test
+    dev_cg_set = CompGCNCGCTripleDst(cg_pairs_dev, test_g_nid_map, all_phrase2id, concept_vocab)
+    test_cg_set = CompGCNCGCTripleDst(cg_pairs_test, test_g_nid_map, all_phrase2id, concept_vocab)
+    # resources for olp test
+    olp_ment_vocab, olp_rel_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
+    dev_olp_set = CompGCNOLPTripleDst(oie_triples_dev, olp_ment_vocab, all_phrase2id)
+    test_olp_set = CompGCNOLPTripleDst(oie_triples_test, olp_ment_vocab, all_phrase2id)
+    all_triple_ids_map = {'h': defaultdict(set),
+                          't': defaultdict(set)}  # resources for OLP filtered eval setting
+    # subj/obj use ment_vocab, rel use all_phrase2id; align with olp_set
+    for (h, r, t) in (oie_triples_train + oie_triples_dev + oie_triples_test):
+        all_triple_ids_map['h'][(olp_ment_vocab[h], all_phrase2id[r])].add(olp_ment_vocab[t])
+        all_triple_ids_map['t'][(olp_ment_vocab[t], all_phrase2id[r])].add(olp_ment_vocab[h])
+    return (train_set_head_batch, train_set_tail_batch, dev_cg_set, test_cg_set,
+            dev_olp_set, test_olp_set, all_triple_ids_map, olp_ment_vocab,
+            tok_vocab, concept_vocab, all_phrase2id, train_G, train_g_nid_map,
+            test_G, test_g_nid_map)
 
 
 if __name__ == '__main__':

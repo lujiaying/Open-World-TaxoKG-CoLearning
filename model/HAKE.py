@@ -18,6 +18,9 @@ PAD_idx = 0
 
 class HAKE(nn.Module):
     def __init__(self, hid_dim: int, gamma: float, modulus_w: float, phase_w: float):
+        """
+        For Open-HAKE version
+        """
         super(HAKE, self).__init__()
         self.hid_dim = hid_dim
         self.gamma = gamma
@@ -85,29 +88,44 @@ class HAKE(nn.Module):
 class HAKEGCNEncoder(nn.Module):
     def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int, gcn_dropout: float, comp_opt: str):
         """
+        Use one big graph to compute all nodes embedding in one shot
+        GCNENcoder aims to learn the projection
         Args:
             comp_opt: implemented ['TransE', 'DistMult']
         """
         super(HAKEGCNEncoder, self).__init__()
         self.dropout = nn.Dropout(p=in_dropout)
-        self.gnn1 = CompGCNLayer(in_emb_dim, in_emb_dim//2, gcn_dropout, comp_opt, use_bn=False)
-        self.W_edge1 = nn.Linear(in_emb_dim, in_emb_dim//2)   # for edges
-        self.gnn2 = CompGCNLayer(in_emb_dim//2, out_emb_dim, gcn_dropout, comp_opt, use_bn=False)
+        self.gnn1 = CompGCNLayer(in_emb_dim, in_emb_dim, gcn_dropout, comp_opt, use_bn=True)
+        self.W_edge1 = nn.Linear(in_emb_dim, in_emb_dim)   # for edges
+        self.gnn2 = CompGCNLayer(in_emb_dim, out_emb_dim, gcn_dropout, comp_opt, use_bn=True)
+        self.W_edge2 = nn.Linear(in_emb_dim, out_emb_dim)   # for edges
 
-    def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+    def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor,
+                rel_embs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
         Args:
-            graphs: (Batch,)
+            graph: 1 big graph
             node_embs: (all_nodes, in_emb)
-            edge_embs: (all_edges, in_emb)
+            edge_embs: (all_edges, in_emb), this is for all edges in graph
+            rel_embs: (Batch, in_emb), this is for input triples
         Returns:
-            size = (Batch, gcn_emb)
+            size = (all_nodes, out_emb)
+            rel_embs: (Batch, out_emb)
         """
+        node_embs = self.encode_graph(graph, node_embs, edge_embs)
+        rel_embs = self.encode_relation(rel_embs)
+        return node_embs, rel_embs
+
+    def encode_graph(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
         node_embs = self.dropout(node_embs)
         edge_embs = self.dropout(edge_embs)
-        node_embs = self.gnn1(graphs, node_embs, edge_embs)
+        node_embs = self.gnn1(graph, node_embs, edge_embs)
         edge_embs = self.W_edge1(edge_embs)
-        node_embs = self.gnn2(graphs, F.relu(node_embs), F.relu(edge_embs))
-        g_node_cnts = graphs.batch_num_nodes()   # (B, )
-        central_nids = [0] + g_node_cnts.cumsum(dim=0).tolist()[:-1]
-        return node_embs[central_nids]
+        node_embs = self.gnn2(graph, F.relu(node_embs), F.relu(edge_embs))
+        node_embs = F.relu(node_embs)   # (all_nodes, out_emb)
+        return node_embs
+
+    def encode_relation(self, rel_embs: th.Tensor) -> th.Tensor:
+        rel_embs = F.relu(self.W_edge1(rel_embs))
+        rel_embs = F.relu(self.W_edge2(rel_embs))  # (B , out_emb)
+        return rel_embs
