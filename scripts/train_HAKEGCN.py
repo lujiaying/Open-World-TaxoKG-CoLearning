@@ -22,7 +22,7 @@ from model.data_loader import get_concept_tok_tensor, BatchType, CompGCNCGCTripl
 from model.data_loader_HAKEGCN import prepare_ingredients_HAKEGCN
 from model.data_loader import HAKETrainDst
 from model.TaxoRelGraph import TokenEncoder
-from model.HAKE import HAKEGCNEncoder, HAKE
+from model.HAKE import HAKEGCNEncoder, HAKE, HAKEGCNScorer
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
@@ -54,6 +54,8 @@ def my_config():
            'neg_size': 256,
            'gsample_method': 'edge_sampling',
            'gsample_prob': 0.0,
+           'add_rel_bias': True,
+           'do_cart_polar_convt': False,
            'tok_emb_dim': 200,
            'emb_dim': 500,
            'emb_dropout': 0.3,
@@ -283,7 +285,11 @@ def main(opt, _run, _log):
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
     gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'], opt['gcn_dropout'],
                                  opt['comp_opt']).to(device)
-    scorer = HAKE(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
+    if opt['do_cart_polar_convt'] is True:
+        scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w'],
+                               add_rel_bias=opt['add_rel_bias'], do_cart_polar_convt=True).to(device)
+    else:
+        scorer = HAKE(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     params = list(tok_encoder.parameters()) + list(gcn_encoder.parameters()) + list(scorer.parameters())
     optimizer = th.optim.Adam(params, opt['optim_lr'], weight_decay=opt['optim_wdecay'])

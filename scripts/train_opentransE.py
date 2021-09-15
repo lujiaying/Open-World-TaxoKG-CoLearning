@@ -18,7 +18,7 @@ from neptunecontrib.monitoring.sacred import NeptuneObserver
 
 from model.data_loader import prepare_ingredients_transE, get_concept_tok_tensor
 from model.data_loader import collate_fn_triples, collate_fn_CGCpairs, collate_fn_oie_triples
-from model.TransE import OpenTransE, OpenDistMult
+from model.TransE import OpenTransE, OpenDistMult, OpenHolE
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
 
 # Sacred Setup to keep everything in record
@@ -197,6 +197,12 @@ def main(opt, _run, _log):
     elif opt['model_type'] == 'DistMult':
         model = OpenDistMult(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
         descending = True
+    elif opt['model_type'] == 'HolE':
+        model = OpenHolE(len(tok_vocab), opt['emb_dim'], opt['dist_norm'])
+        descending = True
+    else:
+        _log.error('Invalid input opt["model_type"]=%s' % (opt['model_type']))
+        exit(-1)
     if opt['pretrain_tok_emb'] != '':
         model.init_tok_emb_by_pretrain(tok_vocab, opt['pretrain_tok_emb'])
         _log.info('[%s] model token embedding init by %s' % (time.ctime(), opt['pretrain_tok_emb']))
