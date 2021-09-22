@@ -821,18 +821,29 @@ class HAKETrainDst(data.Dataset):
     """
     def __init__(self, triples: List[Tuple[str, str, str]],
                  mention_vocab: dict, rel_vocab: dict,
-                 neg_size: int, batch_type: BatchType):
+                 neg_size: int, batch_type: BatchType,
+                 do_cept_neg_sampling: bool = False):
         self.triples = []
+        cept_mids = set()
+        self.TAXO_EDGE_rid = rel_vocab[TAXO_EDGE]
+        self.do_cept_neg_sampling = do_cept_neg_sampling
         for s, r, o in triples:
             sid = mention_vocab[s]
             rid = rel_vocab[r]
             oid = mention_vocab[o]
             self.triples.append((sid, rid, oid))
+            if do_cept_neg_sampling and r == TAXO_EDGE:
+                cept_mids.add(oid)
         self.len = len(self.triples)
         self.num_entity = len(mention_vocab)
         self.neg_size = neg_size
         self.batch_type = batch_type
 
+        # assign distribution p for triples from CG
+        self.cept_neg_sampling_p = np.ones(len(mention_vocab))
+        for mid in cept_mids:
+            self.cept_neg_sampling_p[mid] = 5.0
+        self.cept_neg_sampling_p /= (self.cept_neg_sampling_p.sum())
         # hr,tr_map for valid negative sampling
         # hr,tr_freq for calculating sampling weight
         self.hr_map, self.tr_map, self.hr_freq, self.tr_freq = self.two_tuple_count()
@@ -849,7 +860,10 @@ class HAKETrainDst(data.Dataset):
         neg_triples = []
         neg_size = 0
         while neg_size < self.neg_size:
-            neg_triples_tmp = np.random.randint(self.num_entity, size=self.neg_size * 2)
+            if self.do_cept_neg_sampling and rel == self.TAXO_EDGE_rid:
+                neg_triples_tmp = np.random.choice(self.num_entity, self.neg_size*2, p=self.cept_neg_sampling_p)
+            else:
+                neg_triples_tmp = np.random.randint(self.num_entity, size=self.neg_size*2)
             if self.batch_type == BatchType.HEAD_BATCH:
                 mask = np.in1d(
                     neg_triples_tmp,

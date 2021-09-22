@@ -5,16 +5,19 @@ Create Date: Aug 25, 2021
 """
 from typing import Tuple
 import math
+from collections import OrderedDict
 
-import dgl
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
+import dgl
+import dgl.function as fn
 
 from .data_loader import BatchType
 from .CompGCN import CompGCNLayer
 
 PAD_idx = 0
+Epsilon = 1e-10
 
 
 class HAKE(nn.Module):
@@ -86,8 +89,78 @@ class HAKE(nn.Module):
         return self.gamma - (phase_score + r_score)
 
 
+class GCNLayer(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, in_dropout: float):
+        super(GCNLayer, self).__init__()
+        self.W_O = nn.Linear(in_dim, in_dim)     # for original relations
+        self.W_I = nn.Linear(in_dim, in_dim)     # for inverse relations
+        self.W_S = nn.Linear(in_dim, in_dim)     # for self-loop
+        self.MLP = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(in_dim*2, out_dim)),
+                ('prelu', nn.PReLU())
+                ]))
+
+    def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+        graph_reverse = dgl.reverse(graph, copy_ndata=False)
+        graph.ndata['h'] = node_embs
+        graph.edata['h'] = edge_embs
+        graph_reverse.ndata['h'] = node_embs
+        graph_reverse.edata['h'] = edge_embs
+        # edge, neigh composition in Cartesian Coordinates
+        # aggregation in Polar COordinates
+        # graph.update_all(fn.u_sub_e('h', 'h', 'm'),
+        #                  GCNLayer.node_udf)
+        # graph_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
+        #                          GCNLayer.node_udf)
+        graph.update_all(fn.u_sub_e('h', 'h', 'm'),
+                         fn.mean('m', 'h'))
+        graph_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                 fn.mean('m', 'h'))
+        ho = self.W_O(graph.ndata['h'])
+        hi = self.W_I(graph_reverse.ndata['h'])
+        hs = self.W_S(node_embs)
+        # h = (ho + hi + hs) / 3.0
+        h = self.MLP(th.cat((hs, ho+hi), dim=1))
+        return h
+
+    @staticmethod
+    def node_udf(nodes: dgl.udf.NodeBatch) -> dict:
+        phase, mod = GCNLayer.convert_cartesian_to_polar(nodes.mailbox['m'], False)
+        # phase, mod size = (N, D, h/2)
+        # circular mean for phase
+        phase = th.atan2(th.sin(phase).sum(dim=1), th.cos(phase).sum(dim=1))  # (N, h/2)
+        # geometric mean for modulus
+        mod = th.exp(th.log(mod+Epsilon).mean(dim=1))   # (N, h/2)
+        # arithmetic mean for modulus
+        # mod = mod.mean(dim=1)
+        return {'h': GCNLayer.convert_polar_to_cartesian(th.cat((phase, mod), dim=-1), True)}
+
+    @staticmethod
+    def convert_cartesian_to_polar(emb: th.Tensor, do_cat: bool) -> th.Tensor:
+        x, y = th.chunk(emb, 2, dim=-1)   # (B, h/2)
+        phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
+        mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
+        if do_cat:
+            emb = th.cat((phase, mod), dim=-1)
+            return emb
+        else:
+            return (phase, mod)
+
+    @staticmethod
+    def convert_polar_to_cartesian(emb: th.Tensor, do_cat: bool) -> th.Tensor:
+        phase, mod = th.chunk(emb, 2, dim=-1)   # (B, h/2)
+        x = mod * th.cos(phase)
+        y = mod * th.sin(phase)
+        if do_cat:
+            emb = th.cat((x, y), dim=-1)
+            return emb
+        else:
+            return (x, y)
+
+
 class HAKEGCNEncoder(nn.Module):
-    def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int, gcn_dropout: float, comp_opt: str):
+    def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int):
         """
         Use one big graph to compute all nodes embedding in one shot
         GCNENcoder aims to learn the projection
@@ -95,11 +168,28 @@ class HAKEGCNEncoder(nn.Module):
             comp_opt: implemented ['TransE', 'DistMult']
         """
         super(HAKEGCNEncoder, self).__init__()
-        self.dropout = nn.Dropout(p=in_dropout)
-        self.gnn1 = CompGCNLayer(in_emb_dim, in_emb_dim, gcn_dropout, comp_opt, use_bn=True)
-        self.W_edge1 = nn.Linear(in_emb_dim, in_emb_dim)   # for edges
-        self.gnn2 = CompGCNLayer(in_emb_dim, out_emb_dim, gcn_dropout, comp_opt, use_bn=True)
-        self.W_edge2 = nn.Linear(in_emb_dim, out_emb_dim)   # for edges
+        self.ent_MLP = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(in_emb_dim, out_emb_dim)),
+                ('prelu', nn.PReLU())
+                ]))
+        self.rel_MLP = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(in_emb_dim, out_emb_dim)),
+                ('prelu', nn.PReLU())
+                ]))
+        self.gnn1 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+        self.W_edge1 = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
+                ('prelu', nn.PReLU())
+                ]))
+        self.gnn2 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+        self.W_edge2 = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
+                ('prelu', nn.PReLU())
+                ]))
 
     def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor,
                 rel_embs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
@@ -118,17 +208,16 @@ class HAKEGCNEncoder(nn.Module):
         return node_embs, rel_embs
 
     def encode_graph(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
-        node_embs = self.dropout(node_embs)
-        edge_embs = self.dropout(edge_embs)
+        node_embs = self.ent_MLP(node_embs)
+        edge_embs = self.rel_MLP(edge_embs)
         node_embs = self.gnn1(graph, node_embs, edge_embs)
         edge_embs = self.W_edge1(edge_embs)
-        node_embs = self.gnn2(graph, F.relu(node_embs), F.relu(edge_embs))
-        node_embs = F.relu(node_embs)   # (all_nodes, out_emb)
+        node_embs = self.gnn2(graph, node_embs, edge_embs)  # (all_n, out_emb)
         return node_embs
 
     def encode_relation(self, rel_embs: th.Tensor) -> th.Tensor:
-        rel_embs = F.relu(self.W_edge1(rel_embs))
-        rel_embs = F.relu(self.W_edge2(rel_embs))  # (B , out_emb)
+        rel_embs = self.rel_MLP(rel_embs)
+        rel_embs = self.W_edge2(self.W_edge1(rel_embs))  # (B, out_emb)
         return rel_embs
 
 
@@ -136,100 +225,59 @@ class HAKEGCNScorer(nn.Module):
     """
     For HAKE-GCN
     """
-    def __init__(self, hid_dim: int, gamma: float, modulus_w: float, phase_w: float,
-                 add_rel_bias: bool, do_cart_polar_convt: bool):
-        """
-        For Open-HAKE version
-        Args:
-            do_cart_polar_convt: whether to conduct Cartesian to Polar coordinates conversion
-        """
+    def __init__(self, hid_dim: int, gamma: float, modulus_w: float, phase_w: float):
         super(HAKEGCNScorer, self).__init__()
-        self.hid_dim = hid_dim
         self.gamma = gamma
-        # phase, mod for entity (subj, obj)
-        self.ent_MLP = nn.Linear(hid_dim, hid_dim*2)   # Linear Transformation
-        # phase, mod, bias for relation
-        self.add_rel_bias = add_rel_bias
-        if add_rel_bias:
-            self.rel_MLP = nn.Linear(hid_dim, hid_dim*3)   # Linear Transformation
-        else:
-            self.rel_MLP = nn.Linear(hid_dim, hid_dim*2)   # Linear Transformation
-        self.do_cart_polar_convt = do_cart_polar_convt
-        if do_cart_polar_convt:
-            self.phase_emb_range = math.pi
-        else:
-            self.phase_emb_range = 1.0   # we will use Tanh to constrain range
+        self.phase_emb_range = math.pi
         self.phase_weight = nn.Parameter(th.Tensor([[phase_w * self.phase_emb_range]]))
         self.modulus_weight = nn.Parameter(th.Tensor([[modulus_w]]))
 
     def forward(self, sample: tuple, batch_type: int):
+        # sample=(h,r,t), size=(B, h)
+        h, r, t = sample
         if batch_type == BatchType.SINGLE:
-            # sample=(h,r,t), size=(B, h)
-            h, r, t = sample
-            h = self.ent_MLP(h).unsqueeze(1)   # (B, 1, 2*h)
-            r = self.rel_MLP(r).unsqueeze(1)
-            t = self.ent_MLP(t).unsqueeze(1)
+            h = h.unsqueeze(1)   # (B, 1, h)
+            r = r.unsqueeze(1)
+            t = t.unsqueeze(1)
         elif batch_type == BatchType.HEAD_BATCH:
-            h, r, t = sample
-            h = self.ent_MLP(h)   # (B, neg_size, 2*h)
-            r = self.rel_MLP(r).unsqueeze(1)
-            t = self.ent_MLP(t).unsqueeze(1)  # (B, 1, 2*h)
+            # h size=(B, neg_size, h)
+            r = r.unsqueeze(1)  # (B, 1, h)
+            t = t.unsqueeze(1)  # (B, 1, h)
         elif batch_type == BatchType.TAIL_BATCH:
-            h, r, t = sample
-            h = self.ent_MLP(h).unsqueeze(1)   # (B, 1, 2*h)
-            r = self.rel_MLP(r).unsqueeze(1)
-            t = self.ent_MLP(t)  # (B, neg_size, 2*h)
+            h = h.unsqueeze(1)   # (B, 1, h)
+            r = r.unsqueeze(1)   # (B, 1, h)
+            # t size=(B, neg_size, h)
         else:
             raise ValueError('batch_type %s not supported' % (batch_type))
-        if self.do_cart_polar_convt:
-            h = self.convert_cartesian_to_polar(h, is_rel=False)
-            r = self.convert_cartesian_to_polar(r, is_rel=True)
-            t = self.convert_cartesian_to_polar(t, is_rel=False)
-        else:
-            h = F.tanh(h)
-            r = F.tanh(r)
-            t = F.tanh(t)
+        h = self.convert_cartesian_to_polar(h)
+        r = self.convert_cartesian_to_polar(r)
+        t = self.convert_cartesian_to_polar(t)
         return self.func(h, r, t, batch_type)
 
-    def convert_cartesian_to_polar(self, emb: th.Tensor, is_rel: bool) -> th.Tensor:
-        if is_rel is True and self.add_rel_bias:
-            x, y, bias = th.chunk(emb, 3, dim=2)
-            phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
-            mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
-            emb = th.cat((phase, mod, bias), dim=2)
-        else:
-            x, y = th.chunk(emb, 2, dim=2)   # (B, 1/neg_size, h)
-            phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
-            mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
-            emb = th.cat((phase, mod), dim=2)
+    def convert_cartesian_to_polar(self, emb: th.Tensor) -> th.Tensor:
+        x, y = th.chunk(emb, 2, dim=2)   # (B, 1/neg_size, h/2)
+        phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
+        mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
+        emb = th.cat((phase, mod), dim=2)
         return emb
 
     def func(self, head: th.tensor, rel: th.tensor, tail: th.tensor, batch_type: int) -> th.tensor:
         phase_head, mod_head = th.chunk(head, 2, dim=2)
-        if self.add_rel_bias:
-            phase_relation, mod_relation, bias_relation = th.chunk(rel, 3, dim=2)
-        else:
-            phase_relation, mod_relation = th.chunk(rel, 2, dim=2)
+        phase_relation, mod_relation = th.chunk(rel, 2, dim=2)
         phase_tail, mod_tail = th.chunk(tail, 2, dim=2)
-
+        """
         phase_head = phase_head / (self.phase_emb_range / math.pi)
         phase_relation = phase_relation / (self.phase_emb_range / math.pi)
         phase_tail = phase_tail / (self.phase_emb_range / math.pi)
-
+        """
         if batch_type == BatchType.HEAD_BATCH:
             phase_score = phase_head + (phase_relation - phase_tail)
         else:
             phase_score = (phase_head + phase_relation) - phase_tail
-
-        if self.add_rel_bias:
-            mod_relation = th.abs(mod_relation)
-            bias_relation = th.clamp(bias_relation, max=1)
-            indicator = (bias_relation < -mod_relation)
-            bias_relation[indicator] = -mod_relation[indicator]
-            r_score = mod_head * (mod_relation + bias_relation) - mod_tail * (1 - bias_relation)
-        else:
-            r_score = mod_head * mod_relation - mod_tail
+        r_score = mod_head * mod_relation - mod_tail
 
         r_score = th.norm(r_score, dim=2) * self.modulus_weight
-        phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
+        # phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
+        # TODO: not divide 2, change to L2norm
+        phase_score = th.sum(th.abs(th.sin(phase_score)), dim=2) * self.phase_weight
         return self.gamma - (phase_score + r_score)

@@ -22,8 +22,9 @@ from model.data_loader import get_concept_tok_tensor, BatchType, CompGCNCGCTripl
 from model.data_loader_HAKEGCN import prepare_ingredients_HAKEGCN
 from model.data_loader import HAKETrainDst
 from model.TaxoRelGraph import TokenEncoder
-from model.HAKE import HAKEGCNEncoder, HAKE, HAKEGCNScorer
+from model.HAKE import HAKEGCNEncoder, HAKEGCNScorer
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
+from utils.radam import RAdam
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('HAKEGCN')
@@ -47,27 +48,23 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
-           'epoch': 500,
+           'epoch': 700,
            'validate_freq': 10,
-           'batch_size': 128,
-           'neg_method': 'self_adversarial',
+           'batch_size': 256,
+           'neg_method': 'self_adversarial',   # 'self_adversarial' | 'cept_neg_sampling'
            'neg_size': 256,
-           'gsample_method': 'edge_sampling',
-           'gsample_prob': 0.0,
-           'add_rel_bias': True,
-           'do_cart_polar_convt': False,
            'tok_emb_dim': 200,
-           'emb_dim': 500,
-           'emb_dropout': 0.3,
-           'gcn_dropout': 0.0,
-           'comp_opt': 'TransE',
-           'gamma': 12,
+           'emb_dim': 1000,
+           'emb_dropout': 0.5,
+           'g_edge_sampling': 0.15,
+           'gamma': 12.0,
            'mod_w': 1.0,
            'pha_w': 0.5,
            'adv_temp': 1.0,   # adversarial temperature
-           'optim_type': 'Adam',   # Adam | SGD
+           'optim_type': 'Adam',   # Adam | RAdam | SGD
            'optim_lr': 1e-3,
            'optim_wdecay': 0.5e-4,
+           'w_CGC_MRR': 0.55,   # larger CGC as we perform not well
            }
 
 
@@ -283,20 +280,38 @@ def main(opt, _run, _log):
               len(all_phrase2id), len(concept_vocab)))
     # Build model
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
-    gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'], opt['gcn_dropout'],
-                                 opt['comp_opt']).to(device)
-    if opt['do_cart_polar_convt'] is True:
-        scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w'],
-                               add_rel_bias=opt['add_rel_bias'], do_cart_polar_convt=True).to(device)
-    else:
-        scorer = HAKE(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
+    gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim']).to(device)
+    scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
-    params = list(tok_encoder.parameters()) + list(gcn_encoder.parameters()) + list(scorer.parameters())
-    optimizer = th.optim.Adam(params, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
+    no_decay = list(tok_encoder.parameters()) + list(scorer.parameters())   # embedding, score weight no need
+    decay = []
+    for name, param in gcn_encoder.named_parameters():
+        if len(param.shape) == 1 or name.endswith('.bias'):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    # params = list(tok_encoder.parparamsameters()) + list(gcn_encoder.parameters()) + list(scorer.parameters())
+    params = [{'params': no_decay, 'weight_decay': 0.0},
+              {'params': decay, 'weight_decay': opt['optim_wdecay']}]
+    if opt['optim_type'] == 'Adam':
+        optimizer = th.optim.Adam(params, lr=opt['optim_lr'])
+        scheduler = th.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt['optim_lr'],
+                                                     epochs=opt['epoch'],
+                                                     steps_per_epoch=len(train_iter_head_batch))
+    elif opt['optim_type'] == 'RAdam':
+        optimizer = RAdam(params, lr=opt['optim_lr'])
+        scheduler = th.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt['optim_lr'],
+                                                     epochs=opt['epoch'],
+                                                     steps_per_epoch=len(train_iter_head_batch))
+    elif opt['optim_type'] == 'SGD':
+        optimizer = th.optim.SGD(params, lr=opt['optim_lr'], momentum=0.9, nesterov=True)
+        scheduler = th.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=64, T_mult=2)
+    else:
+        _log.error('invalid optim_type = %s' % (opt['optim_type']))
+        exit(-1)
 
     best_sum_MRR = 0.0
-    w_CGC_MRR = 0.5
-    train_G = train_G.to(device)
+    w_CGC_MRR = opt['w_CGC_MRR']
     test_G = test_G.to(device)
     for i_epoch in range(opt['epoch']):
         # do train
@@ -305,15 +320,23 @@ def main(opt, _run, _log):
         scorer.train()
         train_loss = []
         tail_iter = iter(train_iter_tail_batch)
+        # conduct graph edge sampling per epoch
         for i_batch, batch in enumerate(train_iter_head_batch):
+            # conduct graph edge sampling per batch
+            if opt['g_edge_sampling'] > 0.0:
+                edge_mask = th.rand(train_G.num_edges()) >= opt['g_edge_sampling']
+                train_sG = dgl.edge_subgraph(train_G, edge_mask, relabel_nodes=False).to(device)
+            else:
+                train_G = train_G.to(device)
+                train_sG = train_G
             # head batch
             optimizer.zero_grad()
             ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
             ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
-            node_embs = ment_tok_embs[train_G.ndata['phrid']]  # (n_cnt, tok_emb)
-            edge_embs = ment_tok_embs[train_G.edata['phrid']]  # (e_cng, tok_emb)
+            node_embs = ment_tok_embs[train_sG.ndata['phrid']]  # (n_cnt, tok_emb)
+            edge_embs = ment_tok_embs[train_sG.edata['phrid']]  # (e_cng, tok_emb)
             rel_embs = ment_tok_embs[batch[0][:, 1].to(device)]  # (B, tok_emb)
-            node_embs, rel_embs = gcn_encoder(train_G, node_embs, edge_embs, rel_embs)   # (n_cnt, h), (B, h)
+            node_embs, rel_embs = gcn_encoder(train_sG, node_embs, edge_embs, rel_embs)   # (n_cnt, h), (B, h)
             loss = train_step(scorer, batch, node_embs, rel_embs, opt, device)
             train_loss.append(loss.item())
             loss.backward()
@@ -323,14 +346,15 @@ def main(opt, _run, _log):
             optimizer.zero_grad()
             ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
             ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
-            node_embs = ment_tok_embs[train_G.ndata['phrid']]  # (n_cnt, tok_emb)
-            edge_embs = ment_tok_embs[train_G.edata['phrid']]  # (e_cng, tok_emb)
+            node_embs = ment_tok_embs[train_sG.ndata['phrid']]  # (n_cnt, tok_emb)
+            edge_embs = ment_tok_embs[train_sG.edata['phrid']]  # (e_cng, tok_emb)
             rel_embs = ment_tok_embs[batch[0][:, 1].to(device)]  # (B, tok_emb)
-            node_embs, rel_embs = gcn_encoder(train_G, node_embs, edge_embs, rel_embs)   # (n_cnt, h), (B, h)
+            node_embs, rel_embs = gcn_encoder(train_sG, node_embs, edge_embs, rel_embs)   # (n_cnt, h), (B, h)
             loss = train_step(scorer, batch, node_embs, rel_embs, opt, device)
             train_loss.append(loss.item())
             loss.backward()
             optimizer.step()
+            scheduler.step()
         avg_loss = sum(train_loss) / len(train_loss)
         _run.log_scalar("train.loss", avg_loss, i_epoch)
         _log.info('[%s] epoch#%d train Done, avg loss=%.5f' % (time.ctime(), i_epoch, avg_loss))

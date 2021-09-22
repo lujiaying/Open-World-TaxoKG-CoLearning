@@ -15,43 +15,110 @@ PAD_idx = 0
 
 
 class CompGCNLayer(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str, use_bn: bool = True):
+    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str,
+                 use_bn: bool = True, add_taxo_W: bool = False, polar_aggr: bool = False):
         super(CompGCNLayer, self).__init__()
         self.W_O = nn.Linear(in_dim, out_dim)     # for original relations
         self.W_I = nn.Linear(in_dim, out_dim)     # for inverse relations
         self.W_S = nn.Linear(in_dim, out_dim)     # for self-loop
+        self.add_taxo_W = add_taxo_W
+        if self.add_taxo_W:
+            self.W_O_taxo = nn.Linear(in_dim, out_dim)
+            self.W_I_taxo = nn.Linear(in_dim, out_dim)
         self.dropout = nn.Dropout(dropout)
         self.use_bn = use_bn
         self.bn = nn.BatchNorm1d(out_dim)
         self.comp_opt = comp_opt
+        self.polar_aggr = polar_aggr
 
     def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
         """
         do not change graphs internal data
         assume no self-loop edge exist
         """
+        # graphs_reverse = dgl.reverse(graphs, copy_ndata=True, copy_edata=True)
+        graphs_reverse = dgl.reverse(graphs)
         graphs.ndata['h'] = node_embs
         graphs.edata['h'] = edge_embs
-        graphs_reverse = dgl.reverse(graphs, copy_ndata=True, copy_edata=True)
-        if self.comp_opt == 'TransE':
-            graphs.update_all(fn.u_sub_e('h', 'h', 'm'),
-                              fn.mean('m', 'ho'))
-            graphs_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
-                                      fn.mean('m', 'hi'))
-        elif self.comp_opt == 'DistMult':
-            graphs.update_all(fn.u_mul_e('h', 'h', 'm'),
-                              fn.mean('m', 'ho'))
-            graphs_reverse.update_all(fn.u_mul_e('h', 'h', 'm'),
-                                      fn.mean('m', 'hi'))
+        graphs_reverse.ndata['h'] = node_embs
+        graphs_reverse.edata['h'] = edge_embs
+
+        if not self.add_taxo_W:
+            if self.comp_opt == 'TransE':
+                graphs.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                  fn.mean('m', 'h'))
+                graphs_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                          fn.mean('m', 'h'))
+            elif self.comp_opt == 'DistMult':
+                graphs.update_all(fn.u_mul_e('h', 'h', 'm'),
+                                  fn.mean('m', 'h'))
+                graphs_reverse.update_all(fn.u_mul_e('h', 'h', 'm'),
+                                          fn.mean('m', 'h'))
+            else:
+                print('invalid comp_opt for CompGCN Layer')
+                exit(-1)
+            if not self.polar_aggr:
+                h = 1/3 * self.dropout(self.W_O(graphs.ndata['h']))\
+                    + 1/3 * self.dropout(self.W_I(graphs_reverse.ndata['h']))\
+                    + 1/3 * self.W_S(node_embs)  # (n_cnt, out_dim)
+            else:
+                ho = self.dropout(self.W_O(graphs.ndata['h']))
+                hi = self.dropout(self.W_I(graphs_reverse.ndata['h']))
+                hs = self.W_S(node_embs)
+                ho_phase, ho_mod = CompGCNLayer.convert_cartesian_to_polar(ho, False)
+                hi_phase, hi_mod = CompGCNLayer.convert_cartesian_to_polar(hi, False)
+                hs_phase, hs_mod = CompGCNLayer.convert_cartesian_to_polar(hs, False)
+                # circular mean for phase
+                phase = th.atan2(th.sin(ho_phase)+th.sin(hi_phase)+th.sin(hs_phase),
+                                 th.cos(ho_phase)+th.cos(ho_phase)+th.cos(ho_phase))
+                # geometric mean for modulus
+                mod = th.pow(ho_mod*hi_mod*hs_mod, 1/3)
+                h = CompGCNLayer.convert_polar_to_cartesian(th.cat((phase, mod), dim=1), True)
         else:
-            print('invalid comp_opt for CompGCN Layer')
-            exit(-1)
-        h = 1/3 * self.dropout(self.W_O(graphs.ndata['ho']))\
-            + 1/3 * self.dropout(self.W_I(graphs_reverse.ndata['hi']))\
-            + 1/3 * self.W_S(node_embs)  # (n_cnt, out_dim)
+            emask = graphs.edata['isTaxo']
+            sg_taxo = dgl.edge_subgraph(graphs, emask, relabel_nodes=False)
+            sg_ntaxo = dgl.edge_subgraph(graphs, ~emask, relabel_nodes=False)
+            sgr_taxo = dgl.edge_subgraph(graphs_reverse, emask, relabel_nodes=False)
+            sgr_ntaxo = dgl.edge_subgraph(graphs_reverse, ~emask, relabel_nodes=False)
+            if self.comp_opt == 'TransE':
+                sg_taxo.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                   fn.mean('m', 'h'))
+                sg_ntaxo.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                    fn.mean('m', 'h'))
+                sgr_taxo.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                    fn.mean('m', 'h'))
+                sgr_ntaxo.update_all(fn.u_sub_e('h', 'h', 'm'),
+                                     fn.mean('m', 'h'))
+            h = 1/6 * (self.W_O_taxo(sg_taxo.ndata['h'])
+                       + self.W_O(sg_ntaxo.ndata['h'])
+                       + self.W_I_taxo(sgr_taxo.ndata['h'])
+                       + self.W_I(sgr_ntaxo.ndata['h']))
+            h = self.dropout(h) + 1/3 * self.W_S(node_embs)
         if self.use_bn:
             h = self.bn(h)
         return h
+
+    @staticmethod
+    def convert_cartesian_to_polar(emb: th.Tensor, do_cat: bool) -> th.Tensor:
+        x, y = th.chunk(emb, 2, dim=-1)   # (B, h/2)
+        phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
+        mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
+        if do_cat:
+            emb = th.cat((phase, mod), dim=1)
+            return emb
+        else:
+            return (phase, mod)
+
+    @staticmethod
+    def convert_polar_to_cartesian(emb: th.Tensor, do_cat: bool) -> th.Tensor:
+        phase, mod = th.chunk(emb, 2, dim=-1)   # (B, h/2)
+        x = mod * th.cos(phase)
+        y = mod * th.sin(phase)
+        if do_cat:
+            emb = th.cat((x, y), dim=1)
+            return emb
+        else:
+            return (x, y)
 
 
 class CompGCNTransE(nn.Module):

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_OpenTransE
+#SBATCH --output=logs/slurm_HAKEGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -212,38 +212,39 @@
 # python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN default setting"'\
 #      'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=200'
 # Sep 13
-# python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN +both, large gamma"'\
-#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.do_cart_polar_convt=True'\
-#      'opt.gamma=15'
-# python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN +cart_polar_convert -rel_bias"'\
-#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.do_cart_polar_convt=True'\
-#      'opt.add_rel_bias=False'
-# python -m scripts.train_HAKEGCN with 'motivation="-cart_polar_convert -rel_bias"'\
+# python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN +bias, comp=Mult"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.do_cart_polar_convt=False'\
-#      'opt.add_rel_bias=False'
+#      'opt.comp_opt="DistMult"'
 # python -m scripts.train_HAKEGCN with 'motivation="+cart_polar_convert +rel_bias"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.do_cart_polar_convt=True'\
 #      'opt.add_rel_bias=True'
-# python -m scripts.train_HAKEGCN with 'motivation="+cart_polar_convert +rel_bias"'\
-#      'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.do_cart_polar_convt=True'
+# python -m scripts.train_HAKEGCN with 'motivation="no taxo edge; +polar,H=500"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.do_cart_polar_convt=True'\
+#      'opt.batch_size=256' 'opt.neg_size=128'\
+#      'opt.g_edge_sampling=0.1' 'opt.tok_emb_dim=500' 'opt.epoch=800'
 # python -m scripts.train_HAKEGCN with 'motivation="+cart_polar_convert -rel_bias"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.do_cart_polar_convt=True'\
 #       'opt.add_rel_bias=False'
 # python -m scripts.train_HAKEGCN with 'motivation="-cart_polar_convert -rel_bias"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.do_cart_polar_convt=False'\
 #       'opt.add_rel_bias=False'
-# python -m scripts.train_HAKEGCN with 'motivation="+cart_polar_convert +rel_bias"'\
+# python -m scripts.train_HAKEGCN with 'motivation="+both, hyperp-tune"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.do_cart_polar_convt=True'\
-#       'opt.add_rel_bias=True'
+#       'opt.add_rel_bias=True' 'opt.gamma=9.0'
 
 # Sep 15
-python -m scripts.train_opentransE with 'motivation="HolE"'\
-   'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
-   'opt.model_type="HolE"' 'opt.emb_dim=150'\
-   'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=5.0'\
-   'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
+# python -m scripts.train_opentransE with 'motivation="HolE"'\
+#    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
+#    'opt.model_type="HolE"' 'opt.emb_dim=150'\
+#    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=5.0'\
+#    'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
 # python -m scripts.train_opentransE with 'motivation="DistMult +negative_sampling"'\
 #    'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
+
+# Sep 21
+python -m scripts.train_HAKEGCN with 'motivation="RAdam, +sin(phase), small batch"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="RAdam"'\
+     'opt.tok_emb_dim=500' 'opt.epoch=1000' 'opt.batch_size=128'

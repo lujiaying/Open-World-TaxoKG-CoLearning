@@ -376,6 +376,7 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
     u_l = []
     v_l = []
     edge_pids = []
+    edge_istaxo = []  # True means is taxo edge, otherwise False
     for ent, ceps in cg_pairs_train.items():
         if ent not in train_g_nid_map:
             train_g_nid_map[ent] = len(train_g_nid_map)
@@ -385,6 +386,7 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
             u_l.append(train_g_nid_map[ent])
             v_l.append(train_g_nid_map[cep])
             edge_pids.append(all_phrase2id[TAXO_EDGE])
+            edge_istaxo.append(True)
     for (s, r, o) in oie_triples_train:
         if s not in train_g_nid_map:
             train_g_nid_map[s] = len(train_g_nid_map)
@@ -393,12 +395,17 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
         u_l.append(train_g_nid_map[s])
         v_l.append(train_g_nid_map[o])
         edge_pids.append(all_phrase2id[r])
+        edge_istaxo.append(False)
     train_G = dgl.graph((u_l, v_l))
     node_pids = [[] for _ in range(len(train_g_nid_map))]
     for node, nid in train_g_nid_map.items():
         node_pids[nid] = all_phrase2id[node]
     train_G.ndata['phrid'] = th.LongTensor(node_pids)
     train_G.edata['phrid'] = th.LongTensor(edge_pids)
+    # This is to distinguish with internal etype in hetero graph
+    train_G.edata['isTaxo'] = th.BoolTensor(edge_istaxo)
+    # TODO: try out no taxo edges in graph
+    train_G = dgl.edge_subgraph(train_G, ~(train_G.edata['isTaxo']), relabel_nodes=False)
     # test graph; only add disconnected nodes
     test_g_nid_map = copy.deepcopy(train_g_nid_map)
     for ent, ceps in {**cg_pairs_dev, **cg_pairs_test}.items():
@@ -451,10 +458,16 @@ def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int
         construct_big_graphs(cg_pairs_train, oie_triples_train, cg_pairs_dev, cg_pairs_test,
                              oie_triples_dev, oie_triples_test, all_phrase2id)
     all_triples_train = cg_triples_train + oie_triples_train
+    if neg_method == 'cept_neg_sampling':
+        do_cept_neg_sampling = True
+    else:
+        do_cept_neg_sampling = False
     train_set_head_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
-                                        neg_size, BatchType.HEAD_BATCH)
+                                        neg_size, BatchType.HEAD_BATCH,
+                                        False)
     train_set_tail_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
-                                        neg_size, BatchType.TAIL_BATCH)
+                                        neg_size, BatchType.TAIL_BATCH,
+                                        do_cept_neg_sampling)
     # resource for cgc test
     dev_cg_set = CompGCNCGCTripleDst(cg_pairs_dev, test_g_nid_map, all_phrase2id, concept_vocab)
     test_cg_set = CompGCNCGCTripleDst(cg_pairs_test, test_g_nid_map, all_phrase2id, concept_vocab)

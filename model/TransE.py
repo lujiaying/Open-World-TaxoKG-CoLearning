@@ -301,6 +301,9 @@ def conj(a: th.tensor) -> th.tensor:
 
 
 def ccorr(a: th.tensor, b: th.tensor) -> th.tensor:
+    """
+    Adpated from https://github.com/malllabiisc/CompGCN/blob/master/helper.py
+    """
     return th.irfft(com_mult(conj(th.rfft(a, 1)), th.rfft(b, 1)), 1, signal_sizes=(a.shape[-1],))
 
 
