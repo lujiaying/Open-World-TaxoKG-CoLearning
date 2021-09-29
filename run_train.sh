@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_HAKEGCN
+#SBATCH --output=logs/slurm_RGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -245,6 +245,14 @@
 #    'opt.optim_lr=3e-4' 'opt.batch_size=128' 'opt.epoch=300'
 
 # Sep 21
-python -m scripts.train_HAKEGCN with 'motivation="RAdam, +sin(phase), small batch"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="RAdam"'\
-     'opt.tok_emb_dim=500' 'opt.epoch=1000' 'opt.batch_size=128'
+# python -m scripts.train_HAKEGCN with 'motivation="RAdam, less epoch"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=1200'
+# python -m scripts.train_HAKEGCN with 'motivation="continue train sacred#66, neptune#233"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=700' 'opt.batch_size=128'\
+#      'opt.train_from_checkpoint="checkpoints/HAKEGCN/exp_66_SEMusic-ReVerb.best.ckpt"'
+
+# Sep 28
+python -m scripts.train_RGCN with 'motivation="change loss to subsample weighted"'\
+    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.emb_dim=64'

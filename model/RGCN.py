@@ -40,27 +40,42 @@ class RGCNLayer(nn.Module):
 
     def forward(self, graph: dgl.DGLGraph, graph_reverse: dgl.DGLGraph,
                 node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
-        # TODO: edge_embs too large. can be reduced.
+        """
         a_rb = self.W_rb(edge_embs)   # (edge, basis)
         W_r = th.mm(a_rb, self.W_basis)  # (edge, in_dim*out_dim)
         graph.ndata['h'] = node_embs
         graph.edata['h'] = W_r.view(-1, self.in_dim, self.out_dim)
-        graph.update_all(RGCNLayer.edge_udf, fn.mean('m', 'h'))
         a_rb_inv = self.W_rb_inv(edge_embs)  # (edge, basis)
         W_r_inv = th.mm(a_rb_inv, self.W_basis)  # (edge, in_dim*out_dim)
         graph_reverse.ndata['h'] = node_embs
         graph_reverse.edata['h'] = W_r_inv.view(-1, self.in_dim, self.out_dim)
         graph_reverse.update_all(RGCNLayer.edge_udf, fn.mean('m', 'h'))
+        """
+        graph.ndata['h'] = node_embs
+        graph.edata['h'] = edge_embs
+        graph.update_all(self.edge_udf, fn.mean('m', 'h'))
+        graph_reverse.ndata['h'] = node_embs
+        graph_reverse.edata['h'] = edge_embs
+        graph_reverse.update_all(self.edge_inv_udf, fn.mean('m', 'h'))
+
         h = self.o_dropout(graph.ndata['h']) +\
             self.o_dropout(graph_reverse.ndata['h']) +\
             self.s_dropout(self.W_self(node_embs))
         h = F.relu(h)
         return h
 
-    @staticmethod
-    def edge_udf(edges: dgl.udf.EdgeBatch) -> dict:
+    def edge_udf(self, edges: dgl.udf.EdgeBatch) -> dict:
+        # edges.data['h'] size= (B, in)
+        W_r = th.mm(self.W_rb(edges.data['h']), self.W_basis)
         # (B, 1, in) B-matmul (B, in, out) -> (B, 1, out)
-        m = th.bmm(edges.src['h'].unsqueeze(1), edges.data['h'])
+        m = th.bmm(edges.src['h'].unsqueeze(1), W_r.view(-1, self.in_dim, self.out_dim))
+        return {'m': m.squeeze(1)}
+
+    def edge_inv_udf(self, edges: dgl.udf.EdgeBatch) -> dict:
+        # edges.data['h'] size= (B, in)
+        W_r = th.mm(self.W_rb_inv(edges.data['h']), self.W_basis)
+        # (B, 1, in) B-matmul (B, in, out) -> (B, 1, out)
+        m = th.bmm(edges.src['h'].unsqueeze(1), W_r.view(-1, self.in_dim, self.out_dim))
         return {'m': m.squeeze(1)}
 
 
@@ -124,7 +139,7 @@ class DistMultDecoder(nn.Module):
 
 if __name__ == '__main__':
     in_emb = 16
-    rgcn = RGCN(in_emb, 32, 2)
+    rgcn = RGCN(in_emb, 2)
     node_cnt = 14
     edge_cnt = 21
     G = dgl.rand_graph(node_cnt, edge_cnt)
