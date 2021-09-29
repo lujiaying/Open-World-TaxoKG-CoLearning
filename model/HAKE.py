@@ -160,7 +160,8 @@ class GCNLayer(nn.Module):
 
 
 class HAKEGCNEncoder(nn.Module):
-    def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int):
+    def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int,
+                 gcn_layer: int = 2):
         """
         Use one big graph to compute all nodes embedding in one shot
         GCNENcoder aims to learn the projection
@@ -184,12 +185,14 @@ class HAKEGCNEncoder(nn.Module):
                 ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
                 ('prelu', nn.PReLU())
                 ]))
-        self.gnn2 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
-        self.W_edge2 = nn.Sequential(OrderedDict([
-                ('dropout', nn.Dropout(p=in_dropout)),
-                ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
-                ('prelu', nn.PReLU())
-                ]))
+        self.gcn_layer = gcn_layer
+        if gcn_layer == 2:
+            self.gnn2 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+            self.W_edge2 = nn.Sequential(OrderedDict([
+                    ('dropout', nn.Dropout(p=in_dropout)),
+                    ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
+                    ('prelu', nn.PReLU())
+                    ]))
 
     def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor,
                 rel_embs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
@@ -211,13 +214,16 @@ class HAKEGCNEncoder(nn.Module):
         node_embs = self.ent_MLP(node_embs)
         edge_embs = self.rel_MLP(edge_embs)
         node_embs = self.gnn1(graph, node_embs, edge_embs)
-        edge_embs = self.W_edge1(edge_embs)
-        node_embs = self.gnn2(graph, node_embs, edge_embs)  # (all_n, out_emb)
+        if self.gcn_layer == 2:
+            edge_embs = self.W_edge1(edge_embs)
+            node_embs = self.gnn2(graph, node_embs, edge_embs)  # (all_n, out_emb)
         return node_embs
 
     def encode_relation(self, rel_embs: th.Tensor) -> th.Tensor:
         rel_embs = self.rel_MLP(rel_embs)
-        rel_embs = self.W_edge2(self.W_edge1(rel_embs))  # (B, out_emb)
+        rel_embs = self.W_edge1(rel_embs)  # (B, out_emb)
+        if self.gcn_layer == 2:
+            rel_embs = self.W_edge2(rel_embs)  # (B, out_emb)
         return rel_embs
 
 
@@ -232,7 +238,7 @@ class HAKEGCNScorer(nn.Module):
         self.phase_weight = nn.Parameter(th.Tensor([[phase_w * self.phase_emb_range]]))
         self.modulus_weight = nn.Parameter(th.Tensor([[modulus_w]]))
 
-    def forward(self, sample: tuple, batch_type: int):
+    def forward(self, sample: tuple, batch_type: int) -> th.tensor:
         # sample=(h,r,t), size=(B, h)
         h, r, t = sample
         if batch_type == BatchType.SINGLE:

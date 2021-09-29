@@ -57,6 +57,7 @@ def my_config():
            'emb_dim': 1000,
            'emb_dropout': 0.5,
            'g_edge_sampling': 0.15,
+           'gcn_layer': 2,  # 1 or 2
            'gamma': 12.0,
            'mod_w': 1.0,
            'pha_w': 0.5,
@@ -65,6 +66,7 @@ def my_config():
            'optim_lr': 1e-3,
            'optim_wdecay': 0.5e-4,
            'w_CGC_MRR': 0.55,   # larger CGC as we perform not well
+           'train_from_checkpoint': '',
            }
 
 
@@ -280,9 +282,15 @@ def main(opt, _run, _log):
               len(all_phrase2id), len(concept_vocab)))
     # Build model
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
-    gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim']).to(device)
+    gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'],
+                                 opt['gcn_layer']).to(device)
     scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
+    if opt['train_from_checkpoint']:
+        checkpoint = th.load(opt['train_from_checkpoint'])
+        tok_encoder.load_state_dict(checkpoint['tok_encoder'])
+        gcn_encoder.load_state_dict(checkpoint['gcn_encoder'])
+        scorer.load_state_dict(checkpoint['scorer'])
     no_decay = list(tok_encoder.parameters()) + list(scorer.parameters())   # embedding, score weight no need
     decay = []
     for name, param in gcn_encoder.named_parameters():
@@ -290,7 +298,6 @@ def main(opt, _run, _log):
             no_decay.append(param)
         else:
             decay.append(param)
-    # params = list(tok_encoder.parparamsameters()) + list(gcn_encoder.parameters()) + list(scorer.parameters())
     params = [{'params': no_decay, 'weight_decay': 0.0},
               {'params': decay, 'weight_decay': opt['optim_wdecay']}]
     if opt['optim_type'] == 'Adam':

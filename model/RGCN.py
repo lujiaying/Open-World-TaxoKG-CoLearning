@@ -1,7 +1,7 @@
 """
 CompGCN for CGC-OLP-Bench
 Author: Jiaying Lu
-Create Date: Aug 8, 2021
+Create Date: Sep 24, 2021
 """
 from typing import Tuple
 
@@ -11,121 +11,124 @@ import torch.nn.functional as F
 import dgl
 import dgl.function as fn
 
-PAD_idx = 0
+from .data_loader import BatchType
+
+"""
+Design:
+train dst same as HAKE/HAKEGCN, for negative sampling
+data preparation also similar to HAKEGCN
+
+in, out, self-loop three W_r
+basis V_b size (num_base, layer_in, layer_out), a_rb size (rel_hdim, num_base)
+"""
 
 
-class CompGCNLayer(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, dropout: float, comp_opt: str):
-        super(CompGCNLayer, self).__init__()
-        self.W_O = nn.Linear(in_dim, out_dim)     # for original relations
-        self.W_I = nn.Linear(in_dim, out_dim)     # for inverse relations
-        self.W_S = nn.Linear(in_dim, out_dim)     # for self-loop
-        self.dropout = nn.Dropout(dropout)
-        self.bn = nn.BatchNorm1d(out_dim)
-        self.comp_opt = comp_opt
+class RGCNLayer(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, num_basis: int,
+                 self_dropout: float, other_dropout: float):
+        super(RGCNLayer, self).__init__()
+        self.num_basis = num_basis
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.W_rb = nn.Linear(in_dim, num_basis, bias=False)   # rel to a_rb
+        self.W_rb_inv = nn.Linear(in_dim, num_basis, bias=False)   # rel to a_rb, for inverse rels
+        self.W_basis = nn.Parameter(th.Tensor(num_basis, in_dim*out_dim))
+        nn.init.xavier_uniform_(self.W_basis, gain=nn.init.calculate_gain('relu'))
+        self.W_self = nn.Linear(in_dim, out_dim)
+        self.s_dropout = nn.Dropout(self_dropout)
+        self.o_dropout = nn.Dropout(other_dropout)
 
-    def forward(self, graphs: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
-        """
-        do not change graphs internal data
-        assume no self-loop edge exist
-        """
-        graphs.ndata['h'] = node_embs
-        graphs.edata['h'] = edge_embs
-        graphs_reverse = dgl.reverse(graphs, copy_ndata=True, copy_edata=True)
-        if self.comp_opt == 'TransE':
-            graphs.update_all(fn.u_sub_e('h', 'h', 'm'),
-                              fn.mean('m', 'ho'))
-            graphs_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
-                                      fn.mean('m', 'hi'))
-        elif self.comp_opt == 'DistMult':
-            graphs.update_all(fn.u_mul_e('h', 'h', 'm'),
-                              fn.mean('m', 'ho'))
-            graphs_reverse.update_all(fn.u_mul_e('h', 'h', 'm'),
-                                      fn.mean('m', 'hi'))
-        else:
-            print('invalid comp_opt for CompGCN Layer')
-            exit(-1)
-        h = 1/3 * self.dropout(self.W_O(graphs.ndata['ho']))\
-            + 1/3 * self.dropout(self.W_I(graphs_reverse.ndata['hi']))\
-            + 1/3 * self.W_S(node_embs)  # (n_cnt, out_dim)
-        h = self.bn(h)
+    def forward(self, graph: dgl.DGLGraph, graph_reverse: dgl.DGLGraph,
+                node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+        # TODO: edge_embs too large. can be reduced.
+        a_rb = self.W_rb(edge_embs)   # (edge, basis)
+        W_r = th.mm(a_rb, self.W_basis)  # (edge, in_dim*out_dim)
+        graph.ndata['h'] = node_embs
+        graph.edata['h'] = W_r.view(-1, self.in_dim, self.out_dim)
+        graph.update_all(RGCNLayer.edge_udf, fn.mean('m', 'h'))
+        a_rb_inv = self.W_rb_inv(edge_embs)  # (edge, basis)
+        W_r_inv = th.mm(a_rb_inv, self.W_basis)  # (edge, in_dim*out_dim)
+        graph_reverse.ndata['h'] = node_embs
+        graph_reverse.edata['h'] = W_r_inv.view(-1, self.in_dim, self.out_dim)
+        graph_reverse.update_all(RGCNLayer.edge_udf, fn.mean('m', 'h'))
+        h = self.o_dropout(graph.ndata['h']) +\
+            self.o_dropout(graph_reverse.ndata['h']) +\
+            self.s_dropout(self.W_self(node_embs))
+        h = F.relu(h)
         return h
 
+    @staticmethod
+    def edge_udf(edges: dgl.udf.EdgeBatch) -> dict:
+        # (B, 1, in) B-matmul (B, in, out) -> (B, 1, out)
+        m = th.bmm(edges.src['h'].unsqueeze(1), edges.data['h'])
+        return {'m': m.squeeze(1)}
 
-class CompGCNTransE(nn.Module):
-    def __init__(self, in_emb_dim: int, gcn_emb_dim: int, dropout: float, gcn_dropout: float,
-                 norm: int, gamma: float, gcn_layer: int, score_func: str = 'TransE'):
+
+class RGCN(nn.Module):
+    def __init__(self, hid_dim: int, num_basis: int,
+                 self_dropout: float = 0.2, other_dropout: float = 0.4):
         """
-        Args:
-            score_func: str, used for both composition operator and score function
+        dim=200, basis=2.
+        Edge dropout: self 0.2, other 0.4.
         """
-        super(CompGCNTransE, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        self.norm = norm    # norm for (h+r-t), could be 1 or 2
-        self.gamma = gamma  # for TransE score calculate
-        self.score_func = score_func
-        self.gcn_layer = gcn_layer
-        # CompGCN-TransE only 1 GCN layer
-        self.gnn1 = CompGCNLayer(in_emb_dim, gcn_emb_dim, gcn_dropout, score_func)
-        self.W_rel1 = nn.Linear(in_emb_dim, gcn_emb_dim)   # for edges, no activation
-        self.gnn2 = CompGCNLayer(gcn_emb_dim, gcn_emb_dim, gcn_dropout, score_func) if gcn_layer == 2 else None
-        self.W_rel2 = nn.Linear(gcn_emb_dim, gcn_emb_dim) if gcn_layer == 2 else None
+        super(RGCN, self).__init__()
+        self.rgcn1 = RGCNLayer(hid_dim, hid_dim, num_basis, self_dropout, other_dropout)
+        self.rgcn2 = RGCNLayer(hid_dim, hid_dim, num_basis, self_dropout, other_dropout)
 
-    def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor,
-                hids: th.LongTensor, rids: th.LongTensor, tids: th.LongTensor,
-                is_head_pred: int) -> tuple:
-        hn = self.get_all_node_embs(graph, node_embs, edge_embs)
-        hn = self.dropout(hn)
-        heads = hn[hids]   # (B, emb)
-        tails = hn[tids]   # (B, emb)
-        rels = self.W_rel1(edge_embs[rids])
-        rels = self.dropout(rels)
-        score = self.predict(heads, rels, tails, hn, is_head_pred)
-        return hn, score
+    def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+        graph_reverse = dgl.reverse(graph, copy_ndata=False)
+        node_embs = self.rgcn1(graph, graph_reverse, node_embs, edge_embs)
+        node_embs = self.rgcn2(graph, graph_reverse, node_embs, edge_embs)
+        return node_embs
 
-    def get_all_node_embs(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
-        edge_idices = graph.edata['e_vid']  # (e_cnt,)
-        he = edge_embs[edge_idices.squeeze(-1)]  # (e_cnt, emb)
-        hn = self.gnn1(graph, node_embs, he)
-        hn = F.tanh(hn)
-        if self.gcn_layer == 2:
-            he = self.W_rel1(he)   # (e_cnt, out_dim)
-            hn = self.gnn2(graph, hn, he)
-        return hn
 
-    def get_all_edge_embs(self, edge_embs: th.Tensor) -> th.Tensor:
-        edge_embs = self.W_rel1(edge_embs)
-        if self.gcn_layer == 2:
-            edge_embs = self.W_rel2(edge_embs)
-        return edge_embs
+class DistMultDecoder(nn.Module):
+    """
+    rel embs are updated here.
+    To match RGCN design that only regularizes decoder.
+    """
+    def __init__(self, h_dim: int, dropout: float):
+        super(DistMultDecoder, self).__init__()
+        self.rel_MLP = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(h_dim, h_dim//2),
+                nn.ReLU(),
+                nn.Dropout(p=dropout),
+                nn.Linear(h_dim//2, h_dim),
+                nn.ReLU(),
+                )
 
-    def predict(self, h_embs: th.Tensor, r_embs: th.Tensor, t_embs: th.Tensor,
-                candidate_embs: th.Tensor, is_head_pred: bool) -> th.Tensor:
-        if self.score_func == 'TransE':
-            B = h_embs.size(0)
-            candidate_cnt = candidate_embs.size(0)
-            if is_head_pred == 1:
-                # pred on head
-                r_minus_t = (r_embs - t_embs).repeat_interleave(candidate_cnt, dim=0)  # (B*cnt, emb)
-                dist = (candidate_embs.repeat_interleave(B, dim=0) + r_minus_t).norm(p=self.norm, dim=1)
-            else:
-                # pred on tail
-                h_add_r = (h_embs + r_embs).repeat_interleave(candidate_cnt, dim=0)  # (B*all_n, emb)
-                dist = (h_add_r - candidate_embs.repeat_interleave(B, dim=0)).norm(p=self.norm, dim=1)
-            score = F.sigmoid(self.gamma - dist.reshape(B, candidate_cnt))
-        elif self.score_func == 'DistMult':
-            B = h_embs.size(0)
-            candidate_cnt = candidate_embs.size(0)
-            if is_head_pred == 1:
-                # pred on head
-                r_times_t = r_embs * t_embs  # (B, emb)
-                dist = th.mm(r_times_t, candidate_embs.transpose(1, 0))   # (B, cnt)
-            else:
-                # pred on tail
-                h_times_r = h_embs * r_embs   # (B, emb)
-                dist = th.mm(h_times_r, candidate_embs.transpose(1, 0))   # (B, cnt)
-            score = F.sigmoid(dist)
+    def forward(self, sample: tuple, batch_type: int) -> th.tensor:
+        # sample=(h,r,t), size=(B, h)
+        h, r, t = sample
+        r = self.rel_MLP(r)
+        B = r.size(0)
+        if batch_type == BatchType.SINGLE:
+            score = (h * r * t).sum(dim=1)  # (B, )
+        elif batch_type == BatchType.HEAD_BATCH:
+            # h size=(B*neg_size, h)
+            neg_size = h.size(0) // B
+            r_times_t = (r * t).repeat_interleave(neg_size, dim=0)  # (B*neg, h)
+            score = (h * r_times_t).sum(dim=1)  # (B*neg,)
+            score = score.view(-1, neg_size)  # (B, neg)
+        elif batch_type == BatchType.TAIL_BATCH:
+            # t size=(B*neg_size, h)
+            neg_size = t.size(0) // B
+            h_times_r = (h * r).repeat_interleave(neg_size, dim=0)  # (B*neg, h)
+            score = (t * h_times_r).sum(dim=1)    # (B*neg,)
+            score = score.view(-1, neg_size)  # (B, neg)
         else:
-            print('invalid score_func when predict on CompGCN')
-            exit(-1)
+            raise ValueError('batch_type %s not supported' % (batch_type))
         return score
+
+
+if __name__ == '__main__':
+    in_emb = 16
+    rgcn = RGCN(in_emb, 32, 2)
+    node_cnt = 14
+    edge_cnt = 21
+    G = dgl.rand_graph(node_cnt, edge_cnt)
+    node_embs = th.rand(node_cnt, in_emb)
+    edge_embs = th.rand(edge_cnt, in_emb)
+    h = rgcn(G, node_embs, edge_embs)
+    print('h size', h.size())

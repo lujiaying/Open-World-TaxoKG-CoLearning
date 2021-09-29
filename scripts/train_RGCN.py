@@ -1,9 +1,8 @@
 """
-Training and evaluate CompGCN
+Training and evaluate RGCN
 Author: Jiaying Lu
-Create Date: Aug 8, 2021
+Create Date: Sep 24, 2021
 """
-
 import time
 import os
 import random
@@ -11,21 +10,25 @@ from typing import Tuple
 
 import numpy as np
 import torch as th
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import dgl
 import sacred
 from sacred.observers import FileStorageObserver
 from neptunecontrib.monitoring.sacred import NeptuneObserver
 
-from model.data_loader import prepare_ingredients_CompGCN, CGCOLPGraphTrainDst, get_concept_tok_tensor
-from model.data_loader import CompGCNCGCTripleDst, CompGCNOLPTripleDst
+from model.data_loader import get_concept_tok_tensor, BatchType, CompGCNCGCTripleDst, CompGCNOLPTripleDst
+from model.data_loader_HAKEGCN import prepare_ingredients_HAKEGCN
+from model.data_loader import HAKETrainDst
 from model.TaxoRelGraph import TokenEncoder
-from model.CompGCN import CompGCNTransE
+from model.HAKE import HAKEGCNEncoder, HAKEGCNScorer
+from model.RGCN import RGCN, DistMultDecoder
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
+from utils.radam import RAdam
 
 # Sacred Setup to keep everything in record
-ex = sacred.Experiment('base-CompGCN')
-ex.observers.append(FileStorageObserver("logs/CompGCN"))
+ex = sacred.Experiment('RGCN')
+ex.observers.append(FileStorageObserver("logs/base-RGCN"))
 ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
@@ -36,7 +39,7 @@ def my_config():
            'gpu': False,
            'seed': 27,
            'dataset_type': '',     # MSCG-ReVerb, ..., SEMusic-OPIEC
-           'checkpoint_dir': 'checkpoints/CompGCN',
+           'checkpoint_dir': 'checkpoints/RGCN',
            'dataset_dir': {
                'MSCG-ReVerb': "data/CGC-OLP-BENCH/MSCG-ReVerb",
                'SEMedical-ReVerb': "data/CGC-OLP-BENCH/SEMedical-ReVerb",
@@ -47,56 +50,80 @@ def my_config():
                },
            'epoch': 500,
            'validate_freq': 10,
-           'batch_size': 128,
-           'dist_norm': 1,
-           'gamma': 9.0,
-           'gcn_layer': 1,
-           'score_func': 'TransE',
-           'tok_emb_dim': 200,
-           'gcn_emb_dim': 200,
-           'dropout': 0.1,
-           'gcn_dropout': 0.1,
+           'batch_size': 256,
+           'neg_method': 'self_adversarial',   # 'self_adversarial' | 'cept_neg_sampling'
+           'neg_size': 10,
+           'emb_dim': 500,
+           'emb_dropout': 0.5,
+           'num_basis': 5,
+           'g_self_dropout': 0.2,
+           'g_other_dropout': 0.4,
+           'optim_type': 'Adam',   # Adam | RAdam | SGD
            'optim_lr': 1e-3,
-           'optim_wdecay': 0.0,
-           'label_smooth': 0.1,
-           'clip_grad_max_norm': 2.0,
+           'optim_wdecay': 1e-2,
+           'w_CGC_MRR': 0.5,   # larger CGC as we perform not well
            }
 
 
-def test_CGC_task(compgcn_transe: th.nn.Module, test_iter: DataLoader,
-                  all_node_embs: th.tensor, all_edge_embs: th.tensor, node_vocab: dict,
-                  concept_vocab: dict, device: th.device) -> tuple:
-    MAP_topk = 15
+def cal_CGC_metrics(preds: th.Tensor, golds: list, descending: bool) -> Tuple[list, list, list, list, list]:
+    topk = 15
     MAP = []     # MAP@15
     MRR = []
     P1 = []
     P3 = []
     P10 = []
-    cid_nid_mapping = [-1 for _ in range(len(concept_vocab))]
-    for cep, cid in concept_vocab.items():
-        nid = node_vocab[cep]
-        cid_nid_mapping[cid] = nid
-    cep_embs = all_node_embs[cid_nid_mapping]   # (cep_cnt, emb)
+    preds_idx = preds.argsort(dim=1, descending=descending)    # (B, cep_cnt)
+    for i_batch in range(len(golds)):
+        gold = golds[i_batch]
+        pred_idx = preds_idx[i_batch].tolist()
+        AP = cal_AP_atk(gold, pred_idx, k=topk)
+        MAP.append(AP)
+        RR = cal_reciprocal_rank(gold, pred_idx)
+        MRR.append(RR)
+        gold = set(gold)
+        p1 = len(gold.intersection(set(pred_idx[:1]))) / 1.0
+        p3 = len(gold.intersection(set(pred_idx[:3]))) / 3.0
+        p10 = len(gold.intersection(set(pred_idx[:10]))) / 10.0
+        P1.append(p1)
+        P3.append(p3)
+        P10.append(p10)
+    return MAP, MRR, P1, P3, P10
+
+
+def test_CGC_task(tok_encoder: th.nn.Module, gcn_encoder: th.nn.Module, scorer: th.nn.Module, cg_iter: DataLoader,
+                  tok_vocab: dict, all_phrase2id: dict, test_G: dgl.DGLGraph, test_g_nid_map: dict,
+                  concept_vocab: dict, opt: dict, device: th.device) -> tuple:
+    # pre-compute concept embs
     with th.no_grad():
-        for hids, rids, cep_ids_l in test_iter:
-            h_embs = all_node_embs[hids.to(device)]
-            r_embs = all_edge_embs[rids.to(device)]
-            cep_pred = compgcn_transe.predict(h_embs, r_embs, None, cep_embs, False)  # (B, cand_cnt)
-            cep_pred_idices = cep_pred.argsort(dim=1, descending=True)   # (B, cand_cnt)
-            for i in range(hids.size(0)):
-                gold = cep_ids_l[i]
-                pred = cep_pred_idices[i].tolist()
-                AP = cal_AP_atk(gold, pred, k=MAP_topk)
-                MAP.append(AP)
-                RR = cal_reciprocal_rank(gold, pred)
-                MRR.append(RR)
-                gold = set(gold)
-                p1 = len(gold.intersection(set(pred[:1]))) / 1.0
-                p3 = len(gold.intersection(set(pred[:3]))) / 3.0
-                p10 = len(gold.intersection(set(pred[:10]))) / 10.0
-                P1.append(p1)
-                P3.append(p3)
-                P10.append(p10)
+        ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
+        ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
+        node_embs = ment_tok_embs[test_G.ndata['phrid']]  # (n_cnt, tok_emb)
+        edge_embs = ment_tok_embs[test_G.edata['phrid']]  # (e_cng, tok_emb)
+        node_embs = gcn_encoder(test_G, node_embs, edge_embs)
+        cep_nids = [test_g_nid_map[cep] for cep in concept_vocab.keys()]
+        cep_embs = node_embs[cep_nids]   # (cep_cnt, h)
+    cep_cnt = cep_embs.size(0)
+
+    MAP = []     # MAP@15
+    MRR = []
+    P1 = []
+    P3 = []
+    P10 = []
+    with th.no_grad():
+        for (h_nids, r_pids, cep_ids_l) in cg_iter:
+            head_embs = node_embs[h_nids.to(device)]      # (B, h)
+            rel_embs = ment_tok_embs[r_pids.to(device)]   # (B, tok_h)
+            # rel_embs = gcn_encoder.encode_relation(rel_embs)  # (B, h)
+            B = head_embs.size(0)
+            cep_embs_batch = cep_embs.unsqueeze(0).expand(B, cep_cnt, -1)  # (B, cep_cnt, emb)
+            cep_embs_batch = cep_embs_batch.reshape(B*cep_cnt, -1)
+            pred_scores = scorer((head_embs, rel_embs, cep_embs_batch), BatchType.TAIL_BATCH)   # (B, cep_cnt)
+            MAP_b, MRR_b, P1_b, P3_b, P10_b = cal_CGC_metrics(pred_scores, cep_ids_l, True)
+            MAP.extend(MAP_b)
+            MRR.extend(MRR_b)
+            P1.extend(P1_b)
+            P3.extend(P3_b)
+            P10.extend(P10_b)
     MAP = sum(MAP) / len(MAP)
     MRR = sum(MRR) / len(MRR)
     P1 = sum(P1) / len(P1)
@@ -105,51 +132,99 @@ def test_CGC_task(compgcn_transe: th.nn.Module, test_iter: DataLoader,
     return MAP, MRR, P1, P3, P10
 
 
-def test_OLP_task(compgcn_transe: th.nn.Module, test_iter: DataLoader,
-                  all_node_embs: th.tensor, all_edge_embs: th.tensor, node_vocab: dict,
-                  mention_vocab: dict, all_oie_triples_map: dict, device: th.device) -> tuple:
+def test_OLP_task(tok_encoder: th.nn.Module, gcn_encoder: th.nn.Module, scorer: th.nn.Module,
+                  olp_iter: DataLoader, tok_vocab: dict, all_phrase2id: dict,
+                  test_G: dgl.DGLGraph, test_g_nid_map: dict,
+                  candidate_vocab: dict, opt: dict, device: th.device, all_triple_ids_map: dict) -> tuple:
+    """
+    Args:
+        test_G, test_g_nid_map: contains entities from CG and OKG
+        all_triple_ids_map: subj/obj use ment_vocab id, rel use all_phrase2id
+        olp_iter: subj/obj use ment_vocab id, rel use all_phrase2id
+        candidate_vocab: is the ment_vocab
+    """
+    descending = True
+    # pre-compute candidate embs
+    with th.no_grad():
+        ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
+        ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
+        node_embs = ment_tok_embs[test_G.ndata['phrid']]  # (n_cnt, tok_emb)
+        edge_embs = ment_tok_embs[test_G.edata['phrid']]  # (e_cng, tok_emb)
+        node_embs = gcn_encoder(test_G, node_embs, edge_embs)  # (n_cnt, h)
+        cand_nids = [test_g_nid_map[cand] for cand in candidate_vocab.keys()]
+        cand_embs = node_embs[cand_nids]  # (pool_cnt, h)
+    pool_cnt = cand_embs.size(0)
+
     MRR = 0.0
     Hits10 = 0.0
     Hits30 = 0.0
     Hits50 = 0.0
     total_cnt = 0.0
-    mid_nid_mapping = [-1 for _ in range(len(mention_vocab))]
-    for m, mid in mention_vocab.items():
-        nid = node_vocab[m]
-        mid_nid_mapping[mid] = nid
-    ment_embs = all_node_embs[mid_nid_mapping]  # (ment_cnt, emb)
     with th.no_grad():
-        for (sids, rids, oids) in test_iter:
-            sids = sids.to(device)
-            rids = rids.to(device)
-            oids = oids.to(device)
-            subj_embs = ment_embs[sids]
-            rel_embs = all_edge_embs[rids]
-            obj_embs = ment_embs[oids]
+        for (h_batch, r_batch, t_batch) in olp_iter:
+            B = h_batch.size(0)
+            cand_embs_batch = cand_embs.unsqueeze(0).expand(B, pool_cnt, -1)   # (B, pool_cnt, h)
+            cand_embs_batch = cand_embs_batch.reshape(B*pool_cnt, -1)
+            h_embs = cand_embs[h_batch.to(device)]
+            r_embs = ment_tok_embs[r_batch.to(device)]    # (B, tok_emb)
+            # r_embs = gcn_encoder.encode_relation(r_embs)  # (B, h)
+            t_embs = cand_embs[t_batch.to(device)]
+            h_mids = h_batch.tolist()
+            r_pids = r_batch.tolist()
+            t_mids = t_batch.tolist()
             # tail pred
-            pred_tails = compgcn_transe.predict(subj_embs, rel_embs, obj_embs, ment_embs, False)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, sids, rids,
-                                                         oids, True, all_oie_triples_map,
-                                                         descending=True)
+            pred_tails = scorer((h_embs, r_embs, cand_embs_batch), BatchType.TAIL_BATCH)  # (B, ment_cnt)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_tails, h_mids, r_pids, t_mids,
+                                                         True, all_triple_ids_map, descending)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
             Hits50 += H50_b
             # head pred
-            pred_heads = compgcn_transe.predict(subj_embs, rel_embs, obj_embs, ment_embs, True)  # (B, ment_cnt)
-            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, sids, rids,
-                                                         oids, False, all_oie_triples_map,
-                                                         descending=True)
+            pred_heads = scorer((cand_embs_batch, r_embs, t_embs), BatchType.HEAD_BATCH)  # (B, ment_cnt)
+            MRR_b, H10_b, H30_b, H50_b = cal_OLP_metrics(pred_heads, h_mids, r_pids, t_mids,
+                                                         False, all_triple_ids_map, descending)
             MRR += MRR_b
             Hits10 += H10_b
             Hits30 += H30_b
             Hits50 += H50_b
-            total_cnt += (2 * sids.size(0))
+            total_cnt += (2 * h_batch.size(0))
     MRR /= total_cnt
     Hits10 /= total_cnt
     Hits30 /= total_cnt
     Hits50 /= total_cnt
     return MRR, Hits10, Hits30, Hits50
+
+
+def train_step(scorer: th.nn.Module, batch: tuple, g_node_embs: th.tensor,
+               rels: th.tensor, opt: dict, device: th.device) -> th.tensor:
+    """
+    Args:
+        g_node_embs: gcn computed embs for all nodes in big graph
+        rels: gcn computed embs for current batch
+    """
+    (pos_samples, neg_samples, subsample_weights, batch_type) = batch
+    heads = pos_samples[:, 0].to(device)   # (B,)
+    tails = pos_samples[:, 2].to(device)   # (B,)
+    heads = g_node_embs[heads]   # (B, h)
+    tails = g_node_embs[tails]   # (B, h)
+    pos_scores = scorer((heads, rels, tails), BatchType.SINGLE)   # (B,)
+    pos_scores = F.logsigmoid(pos_scores)   # (B,)
+    neg_size = neg_samples.size(1)   # neg_embs: (B, neg)
+    neg_embs = g_node_embs[neg_samples.view(-1, 1).squeeze(1)]  # (B*neg, hid)
+    if batch_type == BatchType.HEAD_BATCH:
+        neg_scores = scorer((neg_embs, rels, tails), BatchType.HEAD_BATCH)  # (B, neg)
+    elif batch_type == BatchType.TAIL_BATCH:
+        neg_scores = scorer((heads, rels, neg_embs), BatchType.TAIL_BATCH)  # (B, neg)
+    else:
+        raise ValueError('train_step() batch_type %s not supported' % (batch_type))
+    neg_scores = th.log(1 - th.sigmoid(neg_scores) + 1e-12).mean(dim=1)
+    subsample_weights = subsample_weights.to(device)
+    pos_sample_loss = - (subsample_weights * pos_scores).sum() / subsample_weights.sum()
+    neg_sample_loss = - (subsample_weights * neg_scores).sum() / subsample_weights.sum()
+    loss = (pos_sample_loss + neg_sample_loss) / (1.0+neg_size)
+    # loss = -(pos_scores.sum() + neg_scores.sum()) / (1.0+neg_size)
+    return loss
 
 
 @ex.automain
@@ -170,144 +245,176 @@ def main(opt, _run, _log):
     dataset_dir = opt['dataset_dir'][opt['dataset_type']]
     device = th.device('cuda') if opt['gpu'] else th.device('cpu')
     # Load corpus
-    (train_set, dev_CGC_set, test_CGC_set,
-     dev_OLP_set, test_OLP_set,
-     tok_vocab, node_vocab, edge_vocab,
-     mention_vocab, concept_vocab, all_oie_triples_map) = prepare_ingredients_CompGCN(dataset_dir)
-    _log.info('[%s] #node_vocab=%d, #edge_vocab=%d, #ment_vocab=%d, #cep_vocab=%d' % (time.ctime(),
-              len(node_vocab), len(edge_vocab), len(mention_vocab), len(concept_vocab)))
-    train_iter = DataLoader(train_set, collate_fn=CGCOLPGraphTrainDst.collate_fn,
-                            batch_size=opt['batch_size'], shuffle=True)
-    dev_CGC_iter = DataLoader(dev_CGC_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
+    train_set_head_batch, train_set_tail_batch,\
+        dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,\
+        all_triple_ids_map, olp_ment_vocab, tok_vocab, concept_vocab,\
+        all_phrase2id, train_G, train_g_nid_map, test_G, test_g_nid_map\
+        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'])
+    _log.info('[%s] Load dataset Done, len=%d(tr), %d(CGC-dev)|%d(OLP-dev), %d(CGC-tst)|%d(OLP-tst)' % (time.ctime(),
+              len(train_set_head_batch), len(dev_cg_set), len(dev_olp_set), len(test_cg_set), len(test_olp_set)))
+    _log.info('Train G info=%s; Test G info=%s' % (train_G, test_G))
+    train_iter_head_batch = DataLoader(
+            train_set_head_batch,
+            collate_fn=HAKETrainDst.collate_fn,
+            batch_size=opt['batch_size'],
+            shuffle=True
+            )
+    train_iter_tail_batch = DataLoader(
+            train_set_tail_batch,
+            collate_fn=HAKETrainDst.collate_fn,
+            batch_size=opt['batch_size'],
+            shuffle=True
+            )
+    dev_cg_iter = DataLoader(dev_cg_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
+                             batch_size=opt['batch_size'], shuffle=False)
+    test_cg_iter = DataLoader(test_cg_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
                               batch_size=opt['batch_size'], shuffle=False)
-    test_CGC_iter = DataLoader(test_CGC_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
-                               batch_size=opt['batch_size'], shuffle=False)
-    dev_OLP_iter = DataLoader(dev_OLP_set, collate_fn=CompGCNOLPTripleDst.collate_fn,
+    dev_olp_iter = DataLoader(dev_olp_set, collate_fn=CompGCNOLPTripleDst.collate_fn,
                               batch_size=opt['batch_size'], shuffle=False)
-    test_OLP_iter = DataLoader(test_OLP_set, collate_fn=CompGCNOLPTripleDst.collate_fn,
+    test_olp_iter = DataLoader(test_olp_set, collate_fn=CompGCNOLPTripleDst.collate_fn,
                                batch_size=opt['batch_size'], shuffle=False)
-    _log.info('DataLoader Done, trt #triple=%d, graph info:%s' % (len(train_set), train_set.graph))
-    _log.info('CGC dev #triple=%d, test #triple=%d' % (len(dev_CGC_set), len(test_CGC_set)))
-    _log.info('OLP dev #triple=%d, test #triple=%d' % (len(dev_OLP_set), len(test_OLP_set)))
-    # build model
-    token_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
-    compgcn_transe = CompGCNTransE(opt['tok_emb_dim'], opt['gcn_emb_dim'], opt['dropout'],
-                                   opt['gcn_dropout'], opt['dist_norm'], opt['gamma'],
-                                   opt['gcn_layer'], opt['score_func']).to(device)
-    criterion = th.nn.BCELoss().to(device)
+    _log.info('corpus=%s, #Tok=%d, #Mention=%d, #Concept=%d' % (opt['dataset_type'], len(tok_vocab),
+              len(all_phrase2id), len(concept_vocab)))
+    # Build model
+    tok_encoder = TokenEncoder(len(tok_vocab), opt['emb_dim']).to(device)
+    gcn_encoder = RGCN(opt['emb_dim'], opt['num_basis'], opt['g_self_dropout'],
+                       opt['g_other_dropout']).to(device)
+    scorer = DistMultDecoder(opt['emb_dim'], opt['emb_dropout']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
-    params = list(token_encoder.parameters()) + list(compgcn_transe.parameters())
-    optimizer = th.optim.Adam(params, opt['optim_lr'], weight_decay=opt['optim_wdecay'])
-    scheduler = th.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
+    no_decay = list(tok_encoder.parameters()) + list(gcn_encoder.parameters())   # embedding, gcn no need
+    decay = []
+    for name, param in scorer.named_parameters():
+        if len(param.shape) == 1 or name.endswith('.bias'):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    # params = list(tok_encoder.parparamsameters()) + list(gcn_encoder.parameters()) + list(scorer.parameters())
+    params = [{'params': no_decay, 'weight_decay': 0.0},
+              {'params': decay, 'weight_decay': opt['optim_wdecay']}]
+    if opt['optim_type'] == 'Adam':
+        optimizer = th.optim.Adam(params, lr=opt['optim_lr'])
+        scheduler = th.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt['optim_lr'],
+                                                     epochs=opt['epoch'],
+                                                     steps_per_epoch=len(train_iter_head_batch))
+    elif opt['optim_type'] == 'RAdam':
+        optimizer = RAdam(params, lr=opt['optim_lr'])
+        scheduler = th.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=opt['optim_lr'],
+                                                     epochs=opt['epoch'],
+                                                     steps_per_epoch=len(train_iter_head_batch))
+    elif opt['optim_type'] == 'SGD':
+        optimizer = th.optim.SGD(params, lr=opt['optim_lr'], momentum=0.9, nesterov=True)
+        scheduler = th.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=64, T_mult=2)
+    else:
+        _log.error('invalid optim_type = %s' % (opt['optim_type']))
+        exit(-1)
 
-    # start train, eval
     best_sum_MRR = 0.0
-    w_CGC_MRR = 0.5
-    kill_cnt = 0
+    w_CGC_MRR = opt['w_CGC_MRR']
+    train_G = train_G.to(device)
+    test_G = test_G.to(device)
     for i_epoch in range(opt['epoch']):
         # do train
-        token_encoder.train()
-        compgcn_transe.train()
-        is_head_pred = 0
+        tok_encoder.train()
+        gcn_encoder.train()
+        scorer.train()
         train_loss = []
-        g = train_set.graph.to(device)
-        for i_batch, (hids, rids, tids, head_BCE_labels, tail_BCE_labels) in enumerate(train_iter):
+        tail_iter = iter(train_iter_tail_batch)
+        # conduct graph edge sampling per epoch
+        for i_batch, batch in enumerate(train_iter_head_batch):
+            # head batch
             optimizer.zero_grad()
-            hids = hids.to(device)
-            rids = rids.to(device)
-            tids = tids.to(device)
-            # try update graph node embedding every batch
-            node_toks, node_tok_lens = get_concept_tok_tensor(node_vocab, tok_vocab)
-            edge_toks, edge_tok_lens = get_concept_tok_tensor(edge_vocab, tok_vocab)
-            node_tok_embs = token_encoder(node_toks.to(device), node_tok_lens.to(device))
-            edge_tok_embs = token_encoder(edge_toks.to(device), edge_tok_lens.to(device))
-            hn, score = compgcn_transe(g, node_tok_embs, edge_tok_embs,
-                                       hids, rids, tids, is_head_pred)
-            target = head_BCE_labels if is_head_pred else tail_BCE_labels
-            # label smoothing for better performance
-            target = (1.0 - opt['label_smooth']) * target + (1.0 / len(node_vocab))
-            loss = criterion(score, target.to(device))
-            th.nn.utils.clip_grad_norm_(params, max_norm=opt['clip_grad_max_norm'], norm_type=2)
+            ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
+            ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
+            node_embs = ment_tok_embs[train_G.ndata['phrid']]  # (n_cnt, tok_emb)
+            edge_embs = ment_tok_embs[train_G.edata['phrid']]  # (e_cng, tok_emb)
+            rel_embs = ment_tok_embs[batch[0][:, 1].to(device)]  # (B, tok_emb)
+            node_embs = gcn_encoder(train_G, node_embs, edge_embs)   # (n_cnt, h)
+            loss = train_step(scorer, batch, node_embs, rel_embs, opt, device)
+            train_loss.append(loss.item())
             loss.backward()
             optimizer.step()
+            # tail batch
+            batch = next(tail_iter)
+            optimizer.zero_grad()
+            ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
+            ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
+            node_embs = ment_tok_embs[train_G.ndata['phrid']]  # (n_cnt, tok_emb)
+            edge_embs = ment_tok_embs[train_G.edata['phrid']]  # (e_cng, tok_emb)
+            rel_embs = ment_tok_embs[batch[0][:, 1].to(device)]  # (B, tok_emb)
+            node_embs = gcn_encoder(train_G, node_embs, edge_embs)   # (n_cnt, h)
+            loss = train_step(scorer, batch, node_embs, rel_embs, opt, device)
             train_loss.append(loss.item())
-            is_head_pred = (is_head_pred + 1) % 2
+            loss.backward()
+            optimizer.step()
             scheduler.step()
+            break   # TODO: debug
         avg_loss = sum(train_loss) / len(train_loss)
-        _run.log_scalar("train.CGC.loss", avg_loss, i_epoch)
-        _log.info('[%s] epoch#%d train Done, avg BCE loss=%.5f' % (time.ctime(), i_epoch, avg_loss))
+        _run.log_scalar("train.loss", avg_loss, i_epoch)
+        _log.info('[%s] epoch#%d train Done, avg loss=%.5f' % (time.ctime(), i_epoch, avg_loss))
+
         # do eval
         if i_epoch % opt['validate_freq'] == 0:
-            token_encoder.eval()
-            compgcn_transe.eval()
-            node_toks, node_tok_lens = get_concept_tok_tensor(node_vocab, tok_vocab)
-            edge_toks, edge_tok_lens = get_concept_tok_tensor(edge_vocab, tok_vocab)
-            node_tok_embs = token_encoder(node_toks.to(device), node_tok_lens.to(device))
-            edge_tok_embs = token_encoder(edge_toks.to(device), edge_tok_lens.to(device))
-            node_embs = compgcn_transe.get_all_node_embs(g, node_tok_embs, edge_tok_embs)
-            edge_embs = compgcn_transe.get_all_edge_embs(edge_tok_embs)
-            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, dev_CGC_iter, node_embs,
-                                                      edge_embs, node_vocab, concept_vocab, device)
+            tok_encoder.eval()
+            gcn_encoder.eval()
+            scorer.eval()
+            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
+                                                      tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                                      concept_vocab, opt, device)
             _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
             _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
             _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
             _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
             _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
-            _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(),
-                      i_epoch, MAP, CGC_MRR, P1, P3, P10))
-            OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, dev_OLP_iter, node_embs, edge_embs,
-                                                   node_vocab, mention_vocab, all_oie_triples_map, device)
+            _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
+                      (time.ctime(), i_epoch, MAP, CGC_MRR, P1, P3, P10))
+            OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
+                                                   dev_olp_iter, tok_vocab, all_phrase2id,
+                                                   test_G, test_g_nid_map,
+                                                   olp_ment_vocab, opt, device, all_triple_ids_map)
             _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
             _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
             _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
             _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
             _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
                       i_epoch, OLP_MRR, H10, H30, H50))
-            if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR - best_sum_MRR > 1e-5:
+            if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR >= best_sum_MRR:
                 sum_MRR = w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR
-                _log.info('Save best model at eopoch#%d, prev sum_MRR=%.3f, cur sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)' % (
-                          i_epoch, best_sum_MRR, sum_MRR, CGC_MRR, OLP_MRR))
+                _log.info('Save best model at eopoch#%d, prev best_sum_MRR=%.3f, cur best_sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)'
+                          % (i_epoch, best_sum_MRR, sum_MRR, CGC_MRR, OLP_MRR))
                 best_sum_MRR = sum_MRR
                 save_path = '%s/exp_%s_%s.best.ckpt' % (opt['checkpoint_dir'], _run._id, opt['dataset_type'])
                 th.save({
-                         'token_encoder': token_encoder.state_dict(),
-                         'compgcn_transe': compgcn_transe.state_dict(),
+                         'tok_encoder': tok_encoder.state_dict(),
+                         'gcn_encoder': gcn_encoder.state_dict(),
+                         'scorer': scorer.state_dict(),
                          }, save_path)
-            else:
-                kill_cnt += 1
-                if kill_cnt % 10 == 0 and compgcn_transe.gamma > 5.0:
-                    compgcn_transe.gamma -= 5.0
-                    _log.info('Gamma decay on saturation, update to %f' % (compgcn_transe.gamma))
-                if kill_cnt > 25:
-                    _log.info('Early Stopping!!')
-                    break  # break epoch training
+
     # after all epochs, test based on best checkpoint
     checkpoint = th.load(save_path)
-    token_encoder.load_state_dict(checkpoint['token_encoder'])
-    compgcn_transe.load_state_dict(checkpoint['compgcn_transe'])
-    token_encoder = token_encoder.to(device)
-    compgcn_transe = compgcn_transe.to(device)
-    token_encoder.eval()
-    compgcn_transe.eval()
-    node_toks, node_tok_lens = get_concept_tok_tensor(node_vocab, tok_vocab)
-    edge_toks, edge_tok_lens = get_concept_tok_tensor(edge_vocab, tok_vocab)
-    node_tok_embs = token_encoder(node_toks.to(device), node_tok_lens.to(device))
-    edge_tok_embs = token_encoder(edge_toks.to(device), edge_tok_lens.to(device))
-    g = train_set.graph.to(device)
-    node_embs = compgcn_transe.get_all_node_embs(g, node_tok_embs, edge_tok_embs)
-    edge_embs = compgcn_transe.get_all_edge_embs(edge_tok_embs)
-    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, test_CGC_iter, node_embs,
-                                              edge_embs, node_vocab, concept_vocab, device)
+    tok_encoder.load_state_dict(checkpoint['tok_encoder'])
+    tok_encoder = tok_encoder.to(device)
+    tok_encoder.eval()
+    gcn_encoder.load_state_dict(checkpoint['gcn_encoder'])
+    gcn_encoder = gcn_encoder.to(device)
+    gcn_encoder.eval()
+    scorer.load_state_dict(checkpoint['scorer'])
+    scorer = scorer.to(device)
+    scorer.eval()
+    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
+                                              tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                              concept_vocab, opt, device)
     _run.log_scalar("test.CGC.MAP", MAP)
     _run.log_scalar("test.CGC.MRR", CGC_MRR)
     _run.log_scalar("test.CGC.P@1", P1)
     _run.log_scalar("test.CGC.P@3", P3)
     _run.log_scalar("test.CGC.P@10", P10)
     _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
-    OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, test_OLP_iter, node_embs, edge_embs,
-                                           node_vocab, mention_vocab, all_oie_triples_map, device)
-    _run.log_scalar("test.OLP.MRR", OLP_MRR, i_epoch)
-    _run.log_scalar("test.OLP.Hits@10", H10, i_epoch)
-    _run.log_scalar("test.OLP.Hits@30", H30, i_epoch)
-    _run.log_scalar("test.OLP.Hits@50", H50, i_epoch)
+    OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
+                                           test_olp_iter, tok_vocab, all_phrase2id,
+                                           test_G, test_g_nid_map,
+                                           olp_ment_vocab, opt, device, all_triple_ids_map)
+    _run.log_scalar("test.OLP.MRR", OLP_MRR)
+    _run.log_scalar("test.OLP.Hits@10", H10)
+    _run.log_scalar("test.OLP.Hits@30", H30)
+    _run.log_scalar("test.OLP.Hits@50", H50)
     _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))
