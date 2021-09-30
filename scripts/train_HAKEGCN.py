@@ -28,8 +28,8 @@ from utils.radam import RAdam
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('HAKEGCN')
-ex.observers.append(FileStorageObserver("logs/HAKEGCN"))
-ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
+# ex.observers.append(FileStorageObserver("logs/HAKEGCN"))
+# ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
 @ex.config
@@ -67,6 +67,7 @@ def my_config():
            'optim_wdecay': 0.5e-4,
            'w_CGC_MRR': 0.55,   # larger CGC as we perform not well
            'train_from_checkpoint': '',
+           'keep_edges': 'both',  # both | relational | taxonomic
            }
 
 
@@ -254,7 +255,7 @@ def main(opt, _run, _log):
         dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,\
         all_triple_ids_map, olp_ment_vocab, tok_vocab, concept_vocab,\
         all_phrase2id, train_G, train_g_nid_map, test_G, test_g_nid_map\
-        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'])
+        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'], opt['keep_edges'])
     _log.info('[%s] Load dataset Done, len=%d(tr), %d(CGC-dev)|%d(OLP-dev), %d(CGC-tst)|%d(OLP-tst)' % (time.ctime(),
               len(train_set_head_batch), len(dev_cg_set), len(dev_olp_set), len(test_cg_set), len(test_olp_set)))
     _log.info('Train G info=%s; Test G info=%s' % (train_G, test_G))

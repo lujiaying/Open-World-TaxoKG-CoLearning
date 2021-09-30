@@ -101,27 +101,30 @@ class GCNLayer(nn.Module):
                 ('prelu', nn.PReLU())
                 ]))
 
-    def forward(self, graph: dgl.DGLGraph, node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
-        graph_reverse = dgl.reverse(graph, copy_ndata=False)
-        graph.ndata['h'] = node_embs
-        graph.edata['h'] = edge_embs
-        graph_reverse.ndata['h'] = node_embs
-        graph_reverse.edata['h'] = edge_embs
+    def forward(self, graph: dgl.DGLGraph,
+                node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
         # edge, neigh composition in Cartesian Coordinates
         # aggregation in Polar COordinates
         # graph.update_all(fn.u_sub_e('h', 'h', 'm'),
         #                  GCNLayer.node_udf)
         # graph_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
         #                          GCNLayer.node_udf)
+        graph.ndata['h'] = node_embs
+        graph.edata['h'] = edge_embs
         graph.update_all(fn.u_sub_e('h', 'h', 'm'),
                          fn.mean('m', 'h'))
+        h_neigh = self.W_O(graph.ndata['h'])   # h for original edges
+        graph.ndata.pop('h')
+        graph_reverse = dgl.reverse(graph, copy_ndata=False)
+        graph_reverse.ndata['h'] = node_embs
+        graph_reverse.edata['h'] = edge_embs
         graph_reverse.update_all(fn.u_sub_e('h', 'h', 'm'),
                                  fn.mean('m', 'h'))
-        ho = self.W_O(graph.ndata['h'])
-        hi = self.W_I(graph_reverse.ndata['h'])
+        h_neigh = h_neigh + self.W_I(graph_reverse.ndata['h'])   # h for inverse edges
+        graph_reverse.ndata.pop('h')
         hs = self.W_S(node_embs)
         # h = (ho + hi + hs) / 3.0
-        h = self.MLP(th.cat((hs, ho+hi), dim=1))
+        h = self.MLP(th.cat((hs, h_neigh), dim=1))
         return h
 
     @staticmethod
