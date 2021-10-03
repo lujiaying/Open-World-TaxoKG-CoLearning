@@ -149,6 +149,9 @@ def analysis_SemEval(train_gold_path: str, test_gold_path: str):
 
 
 def align_Probase_ReVerb(Probase_path: str, ReVerb_path: str, output_path: str, CM_type: str = "Probase"):
+    """
+    Output OpenKG triples that aligns
+    """
     if CM_type == "Probase":
         concept_pairs = load_Probase(Probase_path)
     elif CM_type == "SemEval":
@@ -369,18 +372,178 @@ def store_filtered_ConceptPairs_ReVerb(CM_path: str, CM_type: str, ReVerb_path: 
             fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
 
 
+def align_split_big_dataset(aligned_concept_path: str, aligned_openie_path: str,
+                            out_dir: str, setting: str):
+    """
+    First get mention kept after threshold and downsampling of both taxonomy and KG
+    Then get the aligned stat
+    Fianlly write out
+    """
+    random.seed(1105)
+    print('out_dir is %s' % (out_dir))
+    if setting == 'MSCG-ReVerb':
+        concept_entity_threshold = 20  # concept's associated entity count
+        concept_further_downsample = 0.05
+        CGC_ent_downsample = 0.027
+        OLP_rel_freq_threshold = 35
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 40
+        OLP_ment_char_threshold = 3
+        OLP_triple_downsample = 0.086
+    elif setting == 'MSCG-OPIEC':
+        concept_entity_threshold = 20  # concept's associated entity count
+        concept_further_downsample = 0.05
+        CGC_ent_downsample = 0.04
+        OLP_rel_freq_threshold = 15
+        OLP_rel_char_threshold = 2
+        OLP_ment_freq_threshold = 30
+        OLP_ment_char_threshold = 3
+        OLP_triple_downsample = 0.1
+    # filter out invalid concept pairs
+    all_concept_pairs = load_merged_SemEval(aligned_concept_path)
+    reverse_concept_pairs = defaultdict(set)  # p: {c1, c2}
+    for c, ps in all_concept_pairs.items():
+        for p in ps:
+            reverse_concept_pairs[p].add(c)
+    kept_concepts = set()
+    for p, cs in reverse_concept_pairs.items():
+        if len(cs) >= concept_entity_threshold:
+            kept_concepts.add(p)
+    print('originally all #concept=%d' % (len(reverse_concept_pairs)))
+    print('after concept freq threshod, kept #concept=%d' % (len(kept_concepts)))
+    # downsample concepts in kept_concepts
+    kept_concepts = random.sample(list(kept_concepts), k=round(len(kept_concepts)*concept_further_downsample))
+    print('after further downsampling, kept #concept=%d' % (len(kept_concepts)))
+    kept_concept_pairs = defaultdict(set)
+    cnt = 0
+    for p, cs in tqdm.tqdm(reverse_concept_pairs.items()):
+        if p not in kept_concepts:
+            continue
+        for c in cs:
+            if random.random() > CGC_ent_downsample:
+                continue
+            kept_concept_pairs[c].add(p)
+            cnt += 1
+    print('final kept ent-cept #ent=%d, pairs=%d' % (len(kept_concept_pairs), cnt))
+    # write out CGC, copy from split_train_dev_test
+    train_ent_cnt = int(len(kept_concept_pairs) * 0.55)
+    test_ent_cnt = int(len(kept_concept_pairs) * 0.35)
+    print('pre-computed train_ent_cnt=%d, test_ent_cnt=%d' % (train_ent_cnt, test_ent_cnt))
+    train_concept_pairs = defaultdict(set)
+    test_concept_pairs = defaultdict(set)
+    dev_concept_pairs = defaultdict(set)
+    all_ents = list(kept_concept_pairs.keys())
+    random.shuffle(all_ents)
+    for ent in all_ents:
+        if len(train_concept_pairs) < train_ent_cnt:
+            train_concept_pairs[ent] = kept_concept_pairs[ent]
+        elif len(test_concept_pairs) < test_ent_cnt:
+            test_concept_pairs[ent] = kept_concept_pairs[ent]
+        else:
+            dev_concept_pairs[ent] = kept_concept_pairs[ent]
+    print('CG - train set')
+    analysis_concept_pairs(train_concept_pairs, False)
+    print('CG - dev set')
+    analysis_concept_pairs(dev_concept_pairs, False)
+    print('CG - test set')
+    analysis_concept_pairs(test_concept_pairs, False)
+    # write to files
+    cg_train_path = '%s/cg_pairs.train.txt' % (out_dir)
+    cg_dev_path = '%s/cg_pairs.dev.txt' % (out_dir)
+    cg_test_path = '%s/cg_pairs.test.txt' % (out_dir)
+    write_concept_pairs_to_file(train_concept_pairs, cg_train_path)
+    write_concept_pairs_to_file(dev_concept_pairs, cg_dev_path)
+    write_concept_pairs_to_file(test_concept_pairs, cg_test_path)
+    # filter out invalid oie pairs
+    # first round to collect info
+    ment_freq_dict = defaultdict(int)
+    rel_freq_dict = defaultdict(int)
+    with open(aligned_openie_path) as fopen:
+        for line in fopen:
+            line_list = line.strip().split('\t')
+            if len(line_list) < 3:
+                continue
+            subj, rel, obj = line_list[0], line_list[1], line_list[2]
+            if len(subj) < OLP_ment_char_threshold or len(rel) < OLP_rel_char_threshold \
+                    or len(obj) < OLP_ment_char_threshold:
+                continue
+            if subj not in kept_concept_pairs and obj not in kept_concept_pairs:
+                continue
+            ment_freq_dict[subj] += 1
+            ment_freq_dict[obj] += 1
+            rel_freq_dict[rel] += 1
+    ment_freq_dict = {k: v for k, v in ment_freq_dict.items() if v >= OLP_ment_freq_threshold}
+    rel_freq_dict = {k: v for k, v in rel_freq_dict.items() if v >= OLP_rel_freq_threshold}
+    # second round to write
+    kept_lines = []
+    with open(aligned_openie_path) as fopen:
+        for line in fopen:
+            line_list = line.strip().split('\t')
+            if len(line_list) < 3:
+                continue
+            subj, rel, obj = line_list[0], line_list[1], line_list[2]
+            if len(subj) < OLP_ment_char_threshold or len(rel) < OLP_rel_char_threshold \
+                    or len(obj) < OLP_ment_char_threshold:
+                continue
+            if subj not in kept_concept_pairs and obj not in kept_concept_pairs:
+                continue
+            if subj not in ment_freq_dict or obj not in ment_freq_dict:
+                continue
+            if rel not in rel_freq_dict:
+                continue
+            if random.random() > OLP_triple_downsample:
+                continue
+            kept_lines.append('%s\t%s\t%s\n' % (subj, rel, obj))
+    print('kept lines after alignment %d' % (len(kept_lines)))
+    # write out OLP, copy from split_train_dev_test
+    total_triple_cnt = len(kept_lines)
+    train_cnt = int(total_triple_cnt * 0.80)
+    test_cnt = int(total_triple_cnt * 0.15)
+    dev_cnt = total_triple_cnt - train_cnt - test_cnt
+    indices = list(range(total_triple_cnt))
+    random.shuffle(indices)
+    test_indices = set(indices[train_cnt:train_cnt+test_cnt])
+    dev_indices = set(indices[-dev_cnt:])
+    oie_train_path = '%s/oie_triples.train.txt' % (out_dir)
+    oie_dev_path = '%s/oie_triples.dev.txt' % (out_dir)
+    oie_test_path = '%s/oie_triples.test.txt' % (out_dir)
+    fwrite_train = open(oie_train_path, 'w')
+    fwrite_dev = open(oie_dev_path, 'w')
+    fwrite_test = open(oie_test_path, 'w')
+    for idx, line in enumerate(kept_lines):
+        if idx in dev_indices:
+            fwrite_dev.write(line)
+        elif idx in test_indices:
+            fwrite_test.write(line)
+        else:
+            fwrite_train.write(line)
+    fwrite_train.close()
+    fwrite_dev.close()
+    fwrite_test.close()
+    print('OIE - train set')
+    analysis_openie_triples(oie_train_path)
+    print('OIE - dev set')
+    analysis_openie_triples(oie_dev_path)
+    print('OIE - test set')
+    analysis_openie_triples(oie_test_path)
+
+
+def downsample_ent_cep_pairs(pairs: dict, percent: float = 0.20) -> dict:
+    cnt = len(pairs)
+    samples = random.sample(list(pairs.items()), k=round(cnt*percent))
+    return {k: v for (k, v) in samples}
+
+
+def write_concept_pairs_to_file(concept_pairs: Dict[str, set], out_path: str):
+    with open(out_path, 'w') as fwrite:
+        for c, ps in concept_pairs.items():
+            fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
+    return
+
+
 def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
                          out_dir: str, setting: str = 'rich'):
-    def downsample_ent_cep_pairs(pairs: dict, percent: float = 0.20) -> dict:
-        cnt = len(pairs)
-        samples = random.sample(list(pairs.items()), k=round(cnt*percent))
-        return {k: v for (k, v) in samples}
 
-    def _write_concept_pairs_to_file(concept_pairs: Dict[str, set], out_path: str):
-        with open(out_path, 'w') as fwrite:
-            for c, ps in concept_pairs.items():
-                fwrite.write('%s\t%s\n' % (c, '\t'.join(ps)))
-        return
     random.seed(1105)
     if setting == 'rich-ReVerb':
         concept_entity_threshold = 40  # freq >= 40
@@ -470,9 +633,9 @@ def split_train_dev_test(aligned_concept_path: str, aligned_openie_path: str,
     cg_train_path = '%s/cg_pairs.train.txt' % (out_dir)
     cg_dev_path = '%s/cg_pairs.dev.txt' % (out_dir)
     cg_test_path = '%s/cg_pairs.test.txt' % (out_dir)
-    _write_concept_pairs_to_file(train_concept_pairs, cg_train_path)
-    _write_concept_pairs_to_file(dev_concept_pairs, cg_dev_path)
-    _write_concept_pairs_to_file(test_concept_pairs, cg_test_path)
+    write_concept_pairs_to_file(train_concept_pairs, cg_train_path)
+    write_concept_pairs_to_file(dev_concept_pairs, cg_dev_path)
+    write_concept_pairs_to_file(test_concept_pairs, cg_test_path)
     # filter out triples that not align with kept entities
     # split openie triples according to ratio
     kept_lines = []
@@ -643,6 +806,7 @@ if __name__ == '__main__':
     aligned_openie_path = 'data/ReVerb/reverb_clueweb_tuples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-ReVerb'
     # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich-ReVerb')
+    # align_split_big_dataset(aligned_concept_path, aligned_openie_path, out_dir, 'MSCG-ReVerb')
     aligned_concept_path = 'data/SemEval2018-Task9/2A.medical.merged_pairs.OPIEC-aligned.txt'
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.SemEvalMedical-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
@@ -655,6 +819,7 @@ if __name__ == '__main__':
     aligned_openie_path = 'data/OPIEC/OPIEC-Linked-triples.Probase-aligned.txt'
     out_dir = 'data/CGC-OLP-BENCH/MSCG-OPIEC'
     # split_train_dev_test(aligned_concept_path, aligned_openie_path, out_dir, 'rich-OPIEC')
+    # align_split_big_dataset(aligned_concept_path, aligned_openie_path, out_dir, 'MSCG-OPIEC')
 
     # Benchmark Stat
     benchmark_dir = 'data/CGC-OLP-BENCH/SEMedical-OPIEC'
