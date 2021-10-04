@@ -162,16 +162,67 @@ class GCNLayer(nn.Module):
             return (x, y)
 
 
+class GCNLayerTaxoKG(nn.Module):
+    """
+    Compute aggregation on taxonomy and KG separately
+    """
+    def __init__(self, in_dim: int, out_dim: int, in_dropout: float):
+        super(GCNLayerTaxoKG, self).__init__()
+        self.W_O = nn.Linear(in_dim, in_dim//2)     # for original relations in KG
+        self.W_I = nn.Linear(in_dim, in_dim//2)     # for inverse relations in KG
+        self.W_S = nn.Linear(in_dim, in_dim)        # for self-loop
+        self.W_C = nn.Linear(in_dim, in_dim//2)     # for original edges in taxonomy
+        self.W_P = nn.Linear(in_dim, in_dim//2)     # for inverse edges in taxonomy
+        self.MLP = nn.Sequential(OrderedDict([
+                ('dropout', nn.Dropout(p=in_dropout)),
+                ('dense', nn.Linear(in_dim*2, out_dim)),
+                ('prelu', nn.PReLU())
+                ]))
+
+    def forward(self, graph: dgl.DGLGraph,
+                node_embs: th.Tensor, edge_embs: th.Tensor) -> th.Tensor:
+        """
+        Assume edge of KG/taxo stores in edata['isTaxo']
+        """
+        graph.ndata['h'] = node_embs
+        graph.edata['h'] = edge_embs
+        # for kg part
+        sg = dgl.edge_subgraph(graph, ~(graph.edata['isTaxo']), relabel_nodes=False)
+        sg.update_all(fn.u_sub_e('h', 'h', 'm'),
+                      fn.sum('m', 'hout'))
+        h_kg = self.W_O(sg.ndata['hout'])
+        sg = dgl.reverse(sg, copy_ndata=True, copy_edata=True)
+        sg.update_all(fn.u_sub_e('h', 'h', 'm'),
+                      fn.sum('m', 'hout'))
+        h_kg = h_kg + self.W_I(sg.ndata['hout'])
+        # for taxo part
+        graph.edata.pop('h')
+        sg = dgl.edge_subgraph(graph, graph.edata['isTaxo'], relabel_nodes=False)
+        sg.update_all(fn.copy_u('h', 'm'),
+                      fn.max('m', 'hout'))   # TODO: change max to mean
+        h_taxo = self.W_C(sg.ndata['hout'])
+        sg = dgl.reverse(sg, copy_ndata=True)
+        sg.update_all(fn.copy_u('h', 'm'),
+                      fn.max('m', 'hout'))   # TODO: change max to mean
+        h_taxo = h_taxo + self.W_P(sg.ndata['hout'])
+        node_embs = self.W_S(node_embs)
+        node_embs = self.MLP(th.cat((node_embs, h_kg, h_taxo), dim=1))
+        return node_embs
+
+
 class HAKEGCNEncoder(nn.Module):
     def __init__(self, in_emb_dim: int, in_dropout: float, out_emb_dim: int,
-                 gcn_layer: int = 2):
+                 gcn_layer: int = 2, gcn_type: str = 'uniform'):
         """
         Use one big graph to compute all nodes embedding in one shot
         GCNENcoder aims to learn the projection
         Args:
-            comp_opt: implemented ['TransE', 'DistMult']
+            gcn_type: 'uniform' - cal all edges, 'specific' - cal taxo and kg edges separately
         """
         super(HAKEGCNEncoder, self).__init__()
+        if gcn_type not in ['uniform', 'specific']:
+            print('invalid gcn_type=%s' % (gcn_type))
+            exit(-1)
         self.ent_MLP = nn.Sequential(OrderedDict([
                 ('dropout', nn.Dropout(p=in_dropout)),
                 ('dense', nn.Linear(in_emb_dim, out_emb_dim)),
@@ -182,7 +233,10 @@ class HAKEGCNEncoder(nn.Module):
                 ('dense', nn.Linear(in_emb_dim, out_emb_dim)),
                 ('prelu', nn.PReLU())
                 ]))
-        self.gnn1 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+        if gcn_type == 'uniform':
+            self.gnn1 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+        elif gcn_type == 'specific':
+            self.gnn1 = GCNLayerTaxoKG(out_emb_dim, out_emb_dim, in_dropout)
         self.W_edge1 = nn.Sequential(OrderedDict([
                 ('dropout', nn.Dropout(p=in_dropout)),
                 ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
@@ -190,7 +244,10 @@ class HAKEGCNEncoder(nn.Module):
                 ]))
         self.gcn_layer = gcn_layer
         if gcn_layer == 2:
-            self.gnn2 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+            if gcn_type == 'uniform':
+                self.gnn2 = GCNLayer(out_emb_dim, out_emb_dim, in_dropout)
+            elif gcn_type == 'specific':
+                self.gnn2 = GCNLayerTaxoKG(out_emb_dim, out_emb_dim, in_dropout)
             self.W_edge2 = nn.Sequential(OrderedDict([
                     ('dropout', nn.Dropout(p=in_dropout)),
                     ('dense', nn.Linear(out_emb_dim, out_emb_dim)),
@@ -267,24 +324,23 @@ class HAKEGCNScorer(nn.Module):
         x, y = th.chunk(emb, 2, dim=2)   # (B, 1/neg_size, h/2)
         phase = th.atan2(y, x)   # phase ranges [-pi, +pi]
         mod = th.sqrt((x.square() + y.square()))   # mod_i >= 0
-        emb = th.cat((phase, mod), dim=2)
-        return emb
+        # emb = th.cat((phase, mod), dim=2)
+        return (phase, mod)
 
     def func(self, head: th.tensor, rel: th.tensor, tail: th.tensor, batch_type: int) -> th.tensor:
+        """
         phase_head, mod_head = th.chunk(head, 2, dim=2)
         phase_relation, mod_relation = th.chunk(rel, 2, dim=2)
         phase_tail, mod_tail = th.chunk(tail, 2, dim=2)
         """
-        phase_head = phase_head / (self.phase_emb_range / math.pi)
-        phase_relation = phase_relation / (self.phase_emb_range / math.pi)
-        phase_tail = phase_tail / (self.phase_emb_range / math.pi)
-        """
+        phase_head, mod_head = head
+        phase_relation, mod_relation = rel
+        phase_tail, mod_tail = tail
         if batch_type == BatchType.HEAD_BATCH:
             phase_score = phase_head + (phase_relation - phase_tail)
         else:
             phase_score = (phase_head + phase_relation) - phase_tail
         r_score = mod_head * mod_relation - mod_tail
-
         r_score = th.norm(r_score, dim=2) * self.modulus_weight
         # phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
         # TODO: not divide 2, change to L2norm

@@ -410,7 +410,6 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
         train_G = dgl.edge_subgraph(train_G, ~(train_G.edata['isTaxo']), relabel_nodes=False)
     elif keep_edges == 'taxonomic':
         train_G = dgl.edge_subgraph(train_G, train_G.edata['isTaxo'], relabel_nodes=False)
-    train_G.edata.pop('isTaxo')
     # test graph; only add disconnected nodes
     test_g_nid_map = copy.deepcopy(train_g_nid_map)
     for ent, ceps in {**cg_pairs_dev, **cg_pairs_test}.items():
@@ -433,7 +432,7 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
     return ((train_G, train_g_nid_map), (test_G, test_g_nid_map))
 
 
-def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int, keep_edges) -> tuple:
+def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int, keep_edges: str = 'both') -> tuple:
     """
     Two big graphs for trian/dev/test sets.
     For dev and test graphs, edges still from train set, but adds nodes.

@@ -394,11 +394,11 @@ def align_split_big_dataset(aligned_concept_path: str, aligned_openie_path: str,
         concept_entity_threshold = 20  # concept's associated entity count
         concept_further_downsample = 0.05
         CGC_ent_downsample = 0.04
-        OLP_rel_freq_threshold = 15
-        OLP_rel_char_threshold = 2
-        OLP_ment_freq_threshold = 30
+        OLP_rel_freq_threshold = 3
+        OLP_rel_char_threshold = 3
+        OLP_ment_freq_threshold = 25
         OLP_ment_char_threshold = 3
-        OLP_triple_downsample = 0.1
+        OLP_triple_downsample = 0.15
     # filter out invalid concept pairs
     all_concept_pairs = load_merged_SemEval(aligned_concept_path)
     reverse_concept_pairs = defaultdict(set)  # p: {c1, c2}

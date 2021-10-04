@@ -28,8 +28,8 @@ from utils.radam import RAdam
 
 # Sacred Setup to keep everything in record
 ex = sacred.Experiment('HAKEGCN')
-# ex.observers.append(FileStorageObserver("logs/HAKEGCN"))
-# ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
+ex.observers.append(FileStorageObserver("logs/HAKEGCN"))
+ex.observers.append(NeptuneObserver(project_name='jlu/CGC-OLP-Bench', source_extensions=['.py']))
 
 
 @ex.config
@@ -68,6 +68,7 @@ def my_config():
            'w_CGC_MRR': 0.55,   # larger CGC as we perform not well
            'train_from_checkpoint': '',
            'keep_edges': 'both',  # both | relational | taxonomic
+           'gcn_type': 'uniform',  # uniform | specific
            }
 
 
@@ -200,6 +201,43 @@ def test_OLP_task(tok_encoder: th.nn.Module, gcn_encoder: th.nn.Module, scorer: 
     return MRR, Hits10, Hits30, Hits50
 
 
+def sample_sg4_bigg(graph: dgl.DGLGraph, node_ids: list) -> dgl.DGLGraph:
+    """
+    Assume always sample 2-hop neighbours
+    """
+    # TODO: may need to change gcn_encoder forward function to accomdate.
+    """
+    # This version do not subsample neighbors
+    in_sg = dgl.in_subgraph(graph, node_ids, relabel_nodes=True)
+    in_sg_nids = in_sg.ndata[dgl.NID]
+    if layer == 2:
+        in_sg = dgl.in_subgraph(graph, in_sg_nids, relabel_nodes=True)
+        in_sg_nids = in_sg.ndata[dgl.NID]
+    out_sg = dgl.out_subgraph(graph, node_ids, relabel_nodes=True)
+    out_sg_nids = out_sg.ndata[dgl.NID]
+    if layer == 2:
+        out_sg = dgl.out_subgraph(graph, out_sg_nids, relabel_nodes=True)
+        out_sg_nids = out_sg.ndata[dgl.NID]
+    sg_nids = set(in_sg_nids.tolist()+out_sg_nids.tolist())
+    sg = dgl.node_subgraph(graph, list(sg_nids), relabel_nodes=True)
+    """
+    one_hop_max_neighs = 6
+    two_hop_max_neighs = 3
+    in_sg = dgl.sampling.sample_neighbors(graph, node_ids, one_hop_max_neighs)
+    in_sg_nids = ((in_sg.in_degrees() != 0) | (in_sg.out_degrees() != 0)).nonzero().squeeze(1).tolist()
+    in_sg_nids = list(set(in_sg_nids) - set(node_ids))   # keep only 1-hop neighbors
+    in_sg = dgl.sampling.sample_neighbors(graph, in_sg_nids, two_hop_max_neighs)
+    in_sg_nids = ((in_sg.in_degrees() != 0) | (in_sg.out_degrees() != 0)).nonzero().squeeze(1).tolist()  # both 1,2-hop
+    out_sg = dgl.sampling.sample_neighbors(graph, node_ids, one_hop_max_neighs, edge_dir='out')
+    out_sg_nids = ((out_sg.in_degrees() != 0) | (in_sg.out_degrees() != 0)).nonzero().squeeze(1).tolist()
+    out_sg_nids = list(set(out_sg_nids) - set(node_ids))   # keep only 1-hop neighbors
+    out_sg = dgl.sampling.sample_neighbors(graph, out_sg_nids, two_hop_max_neighs)
+    out_sg_nids = ((out_sg.in_degrees() != 0) | (out_sg.out_degrees() != 0)).nonzero().squeeze(1).tolist()  # both 1,2
+    node_ids = list(set(node_ids) | set(in_sg_nids) | set(out_sg_nids))
+    sg = dgl.node_subgraph(graph, node_ids, relabel_nodes=True)
+    return sg
+
+
 def train_step(scorer: th.nn.Module, batch: tuple, g_node_embs: th.tensor,
                rels: th.tensor, opt: dict, device: th.device) -> th.tensor:
     """
@@ -284,7 +322,7 @@ def main(opt, _run, _log):
     # Build model
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
     gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'],
-                                 opt['gcn_layer']).to(device)
+                                 opt['gcn_layer'], opt['gcn_type']).to(device)
     scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     if opt['train_from_checkpoint']:
@@ -333,14 +371,14 @@ def main(opt, _run, _log):
             # conduct graph edge sampling per batch
             if opt['g_edge_sampling'] > 0.0:
                 edge_mask = th.rand(train_G.num_edges()) >= opt['g_edge_sampling']
-                train_sG = dgl.edge_subgraph(train_G, edge_mask, relabel_nodes=False).to(device)
+                train_sG = dgl.edge_subgraph(train_G, edge_mask, relabel_nodes=False)
             else:
-                train_G = train_G.to(device)
                 train_sG = train_G
             # head batch
             optimizer.zero_grad()
             ment_toks, ment_tok_lens = get_concept_tok_tensor(all_phrase2id, tok_vocab)
             ment_tok_embs = tok_encoder(ment_toks.to(device), ment_tok_lens.to(device))
+            train_sG = train_sG.to(device)
             node_embs = ment_tok_embs[train_sG.ndata['phrid']]  # (n_cnt, tok_emb)
             edge_embs = ment_tok_embs[train_sG.edata['phrid']]  # (e_cng, tok_emb)
             rel_embs = ment_tok_embs[batch[0][:, 1].to(device)]  # (B, tok_emb)
