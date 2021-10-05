@@ -276,7 +276,7 @@ def prepare_ingredients_HAKEGCN_small_graphs(dataset_dir: str, neg_method: str, 
     Args:
     negative sampling strategy
         neg_size: int
-        neg_method: str, ['self_adversarial']
+        neg_method: str, ['self_adversarial', 'graph_neigh']
     graph sampling strategy
         gsample_method: str, ['node_sampling', 'edge_sampling']
         gsample_prob: 0 means no sampling; otherwise means prob to drop node in graph
@@ -462,16 +462,10 @@ def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int
         construct_big_graphs(cg_pairs_train, oie_triples_train, cg_pairs_dev, cg_pairs_test,
                              oie_triples_dev, oie_triples_test, all_phrase2id, keep_edges)
     all_triples_train = cg_triples_train + oie_triples_train
-    if neg_method == 'cept_neg_sampling':
-        do_cept_neg_sampling = True
-    else:
-        do_cept_neg_sampling = False
     train_set_head_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
-                                        neg_size, BatchType.HEAD_BATCH,
-                                        False)
+                                        neg_size, BatchType.HEAD_BATCH, neg_method)
     train_set_tail_batch = HAKETrainDst(all_triples_train, train_g_nid_map, all_phrase2id,
-                                        neg_size, BatchType.TAIL_BATCH,
-                                        do_cept_neg_sampling)
+                                        neg_size, BatchType.TAIL_BATCH, neg_method)
     # resource for cgc test
     dev_cg_set = CompGCNCGCTripleDst(cg_pairs_dev, test_g_nid_map, all_phrase2id, concept_vocab)
     test_cg_set = CompGCNCGCTripleDst(cg_pairs_test, test_g_nid_map, all_phrase2id, concept_vocab)

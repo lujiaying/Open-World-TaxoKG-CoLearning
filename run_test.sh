@@ -16,10 +16,9 @@
 # Aug 24
 python -m scripts.eval_CountInfer with 'motivation="trial"'\
     'opt.model_type="NaiveCountInfer"'\
-    'opt.dataset_type="SEMusic-OPIEC"'
+    'opt.dataset_type="MSCG-OPIEC"'
     #'opt.dataset_type="MSCG-OPIEC"'
     #'opt.dataset_type="MSCG-ReVerb"'
-    #'opt.dataset_type="MSCG-OPIEC"'
     #'opt.dataset_type="SEMusic-ReVerb"'
     #'opt.dataset_type="SEMedical-ReVerb"'
     #'opt.dataset_type="SEMedical-OPIEC"'

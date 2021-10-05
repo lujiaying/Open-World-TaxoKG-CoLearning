@@ -189,7 +189,7 @@ class GCNLayerTaxoKG(nn.Module):
         # for kg part
         sg = dgl.edge_subgraph(graph, ~(graph.edata['isTaxo']), relabel_nodes=False)
         sg.update_all(fn.u_sub_e('h', 'h', 'm'),
-                      fn.sum('m', 'hout'))
+                      fn.sum('m', 'hout'))   # sum is better than mean, in SEMedical-OPIEC
         h_kg = self.W_O(sg.ndata['hout'])
         sg = dgl.reverse(sg, copy_ndata=True, copy_edata=True)
         sg.update_all(fn.u_sub_e('h', 'h', 'm'),
@@ -199,11 +199,11 @@ class GCNLayerTaxoKG(nn.Module):
         graph.edata.pop('h')
         sg = dgl.edge_subgraph(graph, graph.edata['isTaxo'], relabel_nodes=False)
         sg.update_all(fn.copy_u('h', 'm'),
-                      fn.max('m', 'hout'))   # TODO: change max to mean
+                      fn.max('m', 'hout'))
         h_taxo = self.W_C(sg.ndata['hout'])
         sg = dgl.reverse(sg, copy_ndata=True)
         sg.update_all(fn.copy_u('h', 'm'),
-                      fn.max('m', 'hout'))   # TODO: change max to mean
+                      fn.max('m', 'hout'))
         h_taxo = h_taxo + self.W_P(sg.ndata['hout'])
         node_embs = self.W_S(node_embs)
         node_embs = self.MLP(th.cat((node_embs, h_kg, h_taxo), dim=1))

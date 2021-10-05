@@ -822,31 +822,30 @@ class HAKETrainDst(data.Dataset):
     def __init__(self, triples: List[Tuple[str, str, str]],
                  mention_vocab: dict, rel_vocab: dict,
                  neg_size: int, batch_type: BatchType,
-                 do_cept_neg_sampling: bool = False):
+                 neg_method: str = 'self_adversarial'):
         self.triples = []
-        cept_mids = set()
         self.TAXO_EDGE_rid = rel_vocab[TAXO_EDGE]
-        self.do_cept_neg_sampling = do_cept_neg_sampling
         for s, r, o in triples:
             sid = mention_vocab[s]
             rid = rel_vocab[r]
             oid = mention_vocab[o]
             self.triples.append((sid, rid, oid))
-            if do_cept_neg_sampling and r == TAXO_EDGE:
-                cept_mids.add(oid)
         self.len = len(self.triples)
         self.num_entity = len(mention_vocab)
         self.neg_size = neg_size
         self.batch_type = batch_type
+        if neg_method not in ['self_adversarial', 'graph_neigh']:
+            print('invalid neg_method="%s" for HAKETrainDst' % (neg_method))
+            exit(-1)
+        self.neg_method = neg_method
 
-        # assign distribution p for triples from CG
-        self.cept_neg_sampling_p = np.ones(len(mention_vocab))
-        for mid in cept_mids:
-            self.cept_neg_sampling_p[mid] = 5.0
-        self.cept_neg_sampling_p /= (self.cept_neg_sampling_p.sum())
         # hr,tr_map for valid negative sampling
         # hr,tr_freq for calculating sampling weight
         self.hr_map, self.tr_map, self.hr_freq, self.tr_freq = self.two_tuple_count()
+
+        if neg_method == 'graph_neigh':
+            self.two_hop_neighs = self.get_2hop_neighs()
+            # two hop neighs can less than neg_size or large than.
 
     def __len__(self):
         return self.len
@@ -857,35 +856,39 @@ class HAKETrainDst(data.Dataset):
         subsampling_weight = self.hr_freq[(head, rel)] + self.tr_freq[(tail, rel)]
         subsampling_weight = th.sqrt(1 / th.Tensor([subsampling_weight]))  # scalar
 
-        neg_triples = []
-        neg_size = 0
-        while neg_size < self.neg_size:
-            if self.do_cept_neg_sampling and rel == self.TAXO_EDGE_rid:
-                neg_triples_tmp = np.random.choice(self.num_entity, self.neg_size*2, p=self.cept_neg_sampling_p)
-            else:
-                neg_triples_tmp = np.random.randint(self.num_entity, size=self.neg_size*2)
+        if self.neg_method == 'self_adversarial':
+            neg_triples = []
+            neg_size = 0
+            while neg_size < self.neg_size:
+                neg_triples_tmp = self.do_uniform_neg_sampling(head, rel, tail)
+                neg_triples.append(neg_triples_tmp)
+                neg_size += neg_triples_tmp.size
+            neg_triples = np.concatenate(neg_triples)[:self.neg_size]
+            neg_triples = th.from_numpy(neg_triples)
+        elif self.neg_method == 'graph_neigh':
+            # sample neigh within 2-hop but not link with rel=r
+            # HEAD_BATCH means corrupting head
             if self.batch_type == BatchType.HEAD_BATCH:
-                mask = np.in1d(
-                    neg_triples_tmp,
-                    self.tr_map[(tail, rel)],
-                    assume_unique=True,
-                    invert=True
-                )
+                neg_triples = self.two_hop_neighs[tail]
+                for h_valid in self.tr_map[(tail, rel)]:
+                    neg_triples.discard(h_valid)
             elif self.batch_type == BatchType.TAIL_BATCH:
-                mask = np.in1d(
-                    neg_triples_tmp,
-                    self.hr_map[(head, rel)],
-                    assume_unique=True,
-                    invert=True
-                )
+                neg_triples = self.two_hop_neighs[head]
+                for t_valid in self.hr_map[(head, rel)]:
+                    neg_triples.discard(t_valid)
             else:
                 raise ValueError('Invalid BatchType: {}'.format(self.batch_type))
-            neg_triples_tmp = neg_triples_tmp[mask]
-            neg_triples.append(neg_triples_tmp)
-            neg_size += neg_triples_tmp.size
-        neg_triples = np.concatenate(neg_triples)[:self.neg_size]
+            neg_triples = list(neg_triples)
+            neg_size = len(neg_triples)
+            while neg_size < self.neg_size:
+                neg_triples_tmp = self.do_uniform_neg_sampling(head, rel, tail)
+                neg_triples.extend(neg_triples_tmp.tolist())
+                neg_size += neg_triples_tmp.size
+            # neg_triples = np.concatenate(neg_triples)[:self.neg_size]
+            # neg_triples = th.from_numpy(neg_triples)
+            random.shuffle(neg_triples)   # combine both uniform and graph neigh
+            neg_triples = th.LongTensor(neg_triples[:self.neg_size])
         pos_triple = th.LongTensor(pos_triple)
-        neg_triples = th.from_numpy(neg_triples)
         return pos_triple, neg_triples, subsampling_weight, self.batch_type
 
     @staticmethod
@@ -895,6 +898,28 @@ class HAKETrainDst(data.Dataset):
         subsample_weight = th.cat([_[2] for _ in data], dim=0)
         batch_type = data[0][3]
         return positive_sample, negative_sample, subsample_weight, batch_type
+
+    def do_uniform_neg_sampling(self, head: int, rel: int, tail: int) -> list:
+        neg_triples_tmp = np.random.randint(self.num_entity, size=round(self.neg_size*1.2))
+        # HEAD_BATCH means corrupting head
+        if self.batch_type == BatchType.HEAD_BATCH:
+            mask = np.in1d(
+                neg_triples_tmp,
+                self.tr_map[(tail, rel)],
+                assume_unique=True,
+                invert=True
+            )
+        elif self.batch_type == BatchType.TAIL_BATCH:
+            mask = np.in1d(
+                neg_triples_tmp,
+                self.hr_map[(head, rel)],
+                assume_unique=True,
+                invert=True
+            )
+        else:
+            raise ValueError('Invalid BatchType: {}'.format(self.batch_type))
+        neg_triples_tmp = neg_triples_tmp[mask]
+        return neg_triples_tmp
 
     def two_tuple_count(self):
         """
@@ -933,6 +958,20 @@ class HAKETrainDst(data.Dataset):
             hr_map[key] = np.array(list(hr_map[key]))
 
         return hr_map, tr_map, hr_freq, tr_freq
+
+    def get_2hop_neighs(self) -> dict:
+        one_hop_neighs = defaultdict(set)
+        for s, r, o in self.triples:
+            one_hop_neighs[s].add(o)
+            one_hop_neighs[o].add(s)
+        two_hop_neighs = defaultdict(set)  # include 1hop neighs
+        for ent, neighs in one_hop_neighs.items():
+            two_hop_neighs[ent].update(neighs)
+            for n in neighs:
+                for n2 in one_hop_neighs[n]:
+                    two_hop_neighs[ent].add(n2)
+            two_hop_neighs[ent].discard(ent)  # remove ent itself
+        return two_hop_neighs
 
 
 def prepare_ingredients_HAKE(dataset_dir: str, neg_size: int) -> tuple:

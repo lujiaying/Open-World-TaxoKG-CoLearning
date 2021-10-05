@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_RGCN
+#SBATCH --output=logs/slurm_HAKEGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -168,17 +168,17 @@
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=100'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, MSCG ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
 #    'opt.optim_lr=3e-4' 'opt.batch_size=512' 'opt.epoch=500'
-# python -m scripts.train_opentransE with 'motivation="DistMult, comp_opt ReRun"'\
+# python -m scripts.train_opentransE with 'motivation="DistMult, MSCG ReRun"'\
 #    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"'\
 #    'opt.model_type="DistMult"' 'opt.emb_dim=200'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=1.0'\
@@ -193,10 +193,12 @@
 #     'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.epoch=550'
 # python -m scripts.train_openHAKE with 'motivation="trial"'\
 #     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.epoch=550'
-# python -m scripts.train_openHAKE with 'motivation="OPIEC Re-Run"'\
+# python -m scripts.train_openHAKE with 'motivation="MSCG-OPIEC ReRun"'\
 #     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.epoch=200'
-# python -m scripts.train_openHAKE with 'motivation="trial"'\
-#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'
+#     'opt.batch_size=512' 'opt.neg_size=64' 'opt.emb_dim=200'
+# python -m scripts.train_openHAKE with 'motivation="MSCG, ReRun"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'\
+#     'opt.batch_size=512' 'opt.neg_size=64' 'opt.emb_dim=200'
 
 # Sep 9
 # python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN default setting"'\
@@ -233,7 +235,7 @@
 #       'opt.add_rel_bias=True' 'opt.gamma=9.0'
 
 # Sep 15
-# python -m scripts.train_opentransE with 'motivation="HolE"'\
+# python -m scripts.train_opentransE with 'motivation="HolE, ReRun MSCG-OPIEC"'\
 #    'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"'\
 #    'opt.model_type="HolE"' 'opt.emb_dim=150'\
 #    'opt.checkpoint_dir="checkpoints/OpenTransE"' 'opt.loss_margin=5.0'\
@@ -246,13 +248,36 @@
 
 # Sep 21
 # python -m scripts.train_HAKEGCN with 'motivation="RAdam, less epoch"'\
-#      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.optim_type="RAdam"'\
-#      'opt.tok_emb_dim=500' 'opt.epoch=1200'
+#      'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=250' 'opt.emb_dim=500' 'opt.epoch=500' 'opt.keep_edges="relational"'
 # python -m scripts.train_HAKEGCN with 'motivation="continue train sacred#66, neptune#233"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.optim_type="RAdam"'\
 #      'opt.tok_emb_dim=500' 'opt.epoch=700' 'opt.batch_size=128'\
 #      'opt.train_from_checkpoint="checkpoints/HAKEGCN/exp_66_SEMusic-ReVerb.best.ckpt"'
 
 # Sep 28
-python -m scripts.train_RGCN with 'motivation="change loss to subsample weighted"'\
-    'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.emb_dim=64'
+# python -m scripts.train_RGCN with 'motivation="Rerun MSCG*"'\
+#     'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.emb_dim=100' 'opt.epoch=1000'
+# python -m scripts.train_HAKEGCN with 'motivation="RAdam, edge=taxonomic"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=1000' 'opt.batch_size=256' 'opt.keep_edges="taxonomic"'
+
+# Oct 1
+# python -m scripts.train_HAKEGCN with 'motivation="relational edges only"'\
+#      'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=200' 'opt.emb_dim=800' 'opt.epoch=400'\
+#      'opt.batch_size=512' 'opt.keep_edges="relational"'
+# python -m scripts.train_HAKEGCN with 'motivation="relational edges only"'\
+#      'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=200' 'opt.emb_dim=800' 'opt.epoch=400'\
+#      'opt.batch_size=256' 'opt.keep_edges="relational"'
+ 
+# Oct 4
+# python -m scripts.train_HAKEGCN with 'motivation="RAdam, gcn_type=specific; sum KG, max taxo"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=1200' 'opt.batch_size=128' 'opt.neg_size=128'\
+#      'opt.keep_edges="both"' 'opt.gcn_type="specific"'
+python -m scripts.train_HAKEGCN with 'motivation="graph_neigh+uniform neg; 2gcn:sum,max;"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="Adam"'\
+     'opt.batch_size=128' 'opt.epoch=1000' 'opt.tok_emb_dim=500' 'opt.keep_edges="both"'\
+     'opt.neg_method="graph_neigh"' 'opt.gcn_type="specific"'
