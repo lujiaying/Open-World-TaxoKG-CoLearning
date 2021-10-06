@@ -64,7 +64,7 @@ class CGCPairsDst(data.Dataset):
     def __init__(self, cg_pairs: Dict[str, set], tok_vocab: dict, concept_vocab: dict):
         self.pairs = []
         for ent, concepts in cg_pairs.items():
-            ent_num = [tok_vocab.get(_, PAD_idx) for _ in ent.split(' ')]  # L-token length
+            ent_num = [tok_vocab.get(_, UNK_idx) for _ in ent.split(' ')]  # L-token length
             concepts_nums = [concept_vocab[_] for _ in concepts]   # k concepts length
             self.pairs.append((ent_num, concepts_nums))
 
@@ -88,9 +88,9 @@ class OLPTriplesDst(data.Dataset):
     def __init__(self, triples: list, tok_vocab: dict, mention_vocab: dict, rel_vocab: dict):
         self.triples = []
         for h, r, t in triples:
-            h_num = [tok_vocab.get(_, PAD_idx) for _ in h.split(' ')]
-            r_num = [tok_vocab.get(_, PAD_idx) for _ in r.split(' ')]
-            t_num = [tok_vocab.get(_, PAD_idx) for _ in t.split(' ')]
+            h_num = [tok_vocab.get(_, UNK_idx) for _ in h.split(' ')]
+            r_num = [tok_vocab.get(_, UNK_idx) for _ in r.split(' ')]
+            t_num = [tok_vocab.get(_, UNK_idx) for _ in t.split(' ')]
             h_mid = mention_vocab[h]
             r_rid = rel_vocab[r]
             t_mid = mention_vocab[t]

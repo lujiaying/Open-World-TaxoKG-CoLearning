@@ -1,5 +1,7 @@
 import random
+from collections import Counter
 from typing import Dict
+
 import torch as th
 
 
@@ -126,6 +128,31 @@ def cal_OLP_metrics_nontensor(preds: Dict[str, float], h: str, r: str, t: str,
     h30 = 1.0 if gold in preds[:30] else 0.0
     h50 = 1.0 if gold in preds[:50] else 0.0
     return RR, h10, h30, h50
+
+
+def get_phrase_from_dictid(phr_tids: th.tensor, phr_tlen: int, id2tok: dict) -> str:
+    phr_tids = phr_tids.tolist()[:phr_tlen]
+    phrase = [id2tok[_] for _ in phr_tids]
+    return ' '.join(phrase)
+
+
+def cal_Shannon_diversity_index(all_preds_idx: list) -> float:
+    """
+    $H=-\sum p_i ln(p_i)$, where $p_i$ is proportion
+    """
+    # all_preds_idx size = (n, topk)
+    p = Counter()
+    for preds_idx in all_preds_idx:
+        for idx in preds_idx:
+            p[idx] += 1
+    p = th.FloatTensor(list(p.values())) / sum(p.values())
+    H = (-p * th.log(p)).sum().item()
+    return H
+
+
+def cal_freshness_per_sample(gold: list, pred: list) -> float:
+    fresh_cnt = len([_ for _ in pred if _ in gold])
+    return 1 - (fresh_cnt / len(pred))
 
 
 if __name__ == '__main__':
