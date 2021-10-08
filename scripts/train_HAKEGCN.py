@@ -69,6 +69,8 @@ def my_config():
            'train_from_checkpoint': '',
            'keep_edges': 'both',  # both | relational | taxonomic
            'gcn_type': 'uniform',  # uniform | specific
+           'do_polar_conv': True,
+           'new_score_func': True,
            }
 
 
@@ -323,7 +325,8 @@ def main(opt, _run, _log):
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
     gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'],
                                  opt['gcn_layer'], opt['gcn_type']).to(device)
-    scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
+    scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w'],
+                           opt['do_polar_conv'], opt['new_score_func']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     if opt['train_from_checkpoint']:
         checkpoint = th.load(opt['train_from_checkpoint'])

@@ -291,12 +291,15 @@ class HAKEGCNScorer(nn.Module):
     """
     For HAKE-GCN
     """
-    def __init__(self, hid_dim: int, gamma: float, modulus_w: float, phase_w: float):
+    def __init__(self, hid_dim: int, gamma: float, modulus_w: float, phase_w: float,
+                 do_polar_conv: bool = True, new_score_func: bool = True):
         super(HAKEGCNScorer, self).__init__()
         self.gamma = gamma
         self.phase_emb_range = math.pi
         self.phase_weight = nn.Parameter(th.Tensor([[phase_w * self.phase_emb_range]]))
         self.modulus_weight = nn.Parameter(th.Tensor([[modulus_w]]))
+        self.do_polar_conv = do_polar_conv
+        self.new_score_func = new_score_func
 
     def forward(self, sample: tuple, batch_type: int) -> th.tensor:
         # sample=(h,r,t), size=(B, h)
@@ -315,9 +318,14 @@ class HAKEGCNScorer(nn.Module):
             # t size=(B, neg_size, h)
         else:
             raise ValueError('batch_type %s not supported' % (batch_type))
-        h = self.convert_cartesian_to_polar(h)
-        r = self.convert_cartesian_to_polar(r)
-        t = self.convert_cartesian_to_polar(t)
+        if self.do_polar_conv:
+            h = self.convert_cartesian_to_polar(h)
+            r = self.convert_cartesian_to_polar(r)
+            t = self.convert_cartesian_to_polar(t)
+        else:
+            h = th.chunk(h, 2, dim=2)
+            r = th.chunk(r, 2, dim=2)
+            t = th.chunk(t, 2, dim=2)
         return self.func(h, r, t, batch_type)
 
     def convert_cartesian_to_polar(self, emb: th.Tensor) -> th.Tensor:
@@ -328,11 +336,6 @@ class HAKEGCNScorer(nn.Module):
         return (phase, mod)
 
     def func(self, head: th.tensor, rel: th.tensor, tail: th.tensor, batch_type: int) -> th.tensor:
-        """
-        phase_head, mod_head = th.chunk(head, 2, dim=2)
-        phase_relation, mod_relation = th.chunk(rel, 2, dim=2)
-        phase_tail, mod_tail = th.chunk(tail, 2, dim=2)
-        """
         phase_head, mod_head = head
         phase_relation, mod_relation = rel
         phase_tail, mod_tail = tail
@@ -342,7 +345,8 @@ class HAKEGCNScorer(nn.Module):
             phase_score = (phase_head + phase_relation) - phase_tail
         r_score = mod_head * mod_relation - mod_tail
         r_score = th.norm(r_score, dim=2) * self.modulus_weight
-        # phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
-        # TODO: not divide 2, change to L2norm
-        phase_score = th.sum(th.abs(th.sin(phase_score)), dim=2) * self.phase_weight
+        if self.new_score_func is True:
+            phase_score = th.sum(th.abs(th.sin(phase_score)), dim=2) * self.phase_weight
+        else:
+            phase_score = th.sum(th.abs(th.sin(phase_score / 2)), dim=2) * self.phase_weight
         return self.gamma - (phase_score + r_score)

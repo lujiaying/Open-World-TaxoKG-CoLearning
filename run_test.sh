@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=Test-TaxoKG-TransE
-#SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_test_openHAKE
+#SBATCH --gres=gpu:2
+#SBATCH --output=logs/slurm_test_HAKEGCN
 
 # Jun 20
 # python -m scripts.test_taxotransE with 'config_path="logs/Taxo-TransE/11/config.json"' \
@@ -14,9 +14,9 @@
 #     'checkpoint_path="checkpoints/TransE/exp_12_CN100k.best.ckpt"'
 
 # Aug 24
-python -m scripts.eval_CountInfer with 'motivation="trial"'\
-    'opt.model_type="NaiveCountInfer"'\
-    'opt.dataset_type="MSCG-OPIEC"'
+# python -m scripts.eval_CountInfer with 'motivation="trial"'\
+#     'opt.model_type="NaiveCountInfer"'\
+#     'opt.dataset_type="MSCG-OPIEC"'
     #'opt.dataset_type="MSCG-OPIEC"'
     #'opt.dataset_type="MSCG-ReVerb"'
     #'opt.dataset_type="SEMusic-ReVerb"'
@@ -39,3 +39,26 @@ python -m scripts.eval_CountInfer with 'motivation="trial"'\
 #     'checkpoint_path="checkpoints/OpenHAKE/exp_8_SEMedical-OPIEC.best.ckpt"'
 # python -m scripts.test_openHAKE with 'config_path="logs/open-HAKE/7/config.json"'\
 #     'checkpoint_path="checkpoints/OpenHAKE/exp_7_SEMusic-OPIEC.best.ckpt"'
+
+# Oct 5
+# Human Eval
+# python -m scripts.test_openHAKE with 'config_path="logs/open-HAKE/4/config.json"'\
+#     'checkpoint_path="checkpoints/OpenHAKE/exp_4_SEMusic-ReVerb.best.ckpt"'\
+#     'do_human_eval="human_eval/models/HAKE/SEMusic-ReVerb"'
+#     'checkpoint_path="checkpoints/OpenHAKE/exp_13_MSCG-OPIEC.best.ckpt"' # have not generate
+#     'checkpoint_path="checkpoints/OpenHAKE/exp_11_MSCG-ReVerb.best.ckpt"'\
+#    'checkpoint_path="checkpoints/OpenHAKE/exp_8_SEMedical-OPIEC.best.ckpt"'\
+# python -m scripts.test_RGCN with 'config_path="logs/base-RGCN/13/config.json"'\
+#     'checkpoint_path="checkpoints/RGCN/exp_13_MSCG-ReVerb.best.ckpt"'\
+#     'human_eval_path="human_eval/models/RGCN/MSCG-ReVerb"'
+CUDA_VISIBLE_DEVICES=6 python -m scripts.test_CompGCN with 'config_path="logs/CompGCN/15/config.json"'\
+     'checkpoint_path="checkpoints/CompGCN/exp_15_SEMusic-ReVerb.best.ckpt"'\
+     'human_eval_path="human_eval/models/CompGCN/SEMusic-ReVerb"'
+#    'checkpoint_path="checkpoints/CompGCN/exp_15_SEMusic-ReVerb.best.ckpt"'\
+#    'checkpoint_path="checkpoints/CompGCN/exp_23_MSCG-ReVerb.best.ckpt"'\
+#    'checkpoint_path="checkpoints/CompGCN/exp_11_SEMedical-OPIEC.best.ckpt"'\
+
+# CUDA_VISIBLE_DEVICES=6 python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/69/config.json"'\
+#      'checkpoint_path="checkpoints/HAKEGCN/exp_69_SEMusic-ReVerb.best.ckpt"'\
+#      'human_eval_path="human_eval/models/HAKEGCN/SEMusic-ReVerb"'
+#     'checkpoint_path="checkpoints/HAKEGCN/exp_60_SEMedical-OPIEC.best.ckpt"'\

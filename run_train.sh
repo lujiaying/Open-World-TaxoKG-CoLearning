@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_HAKEGCN
+#SBATCH --output=logs/slurm_Oct7_HAKEGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -277,7 +277,27 @@
 #      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="RAdam"'\
 #      'opt.tok_emb_dim=500' 'opt.epoch=1200' 'opt.batch_size=128' 'opt.neg_size=128'\
 #      'opt.keep_edges="both"' 'opt.gcn_type="specific"'
-python -m scripts.train_HAKEGCN with 'motivation="graph_neigh+uniform neg; 2gcn:sum,max;"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="Adam"'\
-     'opt.batch_size=128' 'opt.epoch=1000' 'opt.tok_emb_dim=500' 'opt.keep_edges="both"'\
-     'opt.neg_method="graph_neigh"' 'opt.gcn_type="specific"'
+# python -m scripts.train_HAKEGCN with 'motivation="graph_neigh+uniform neg; 2gcn:sum,max;"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.optim_type="Adam"'\
+#      'opt.batch_size=128' 'opt.epoch=1000' 'opt.tok_emb_dim=500' 'opt.keep_edges="both"'\
+#      'opt.neg_method="graph_neigh"' 'opt.gcn_type="specific"'
+# python -m scripts.train_HAKEGCN with 'motivation="neg=graph_neigh;continue train sacred#85, neptune#292;"'\
+#      'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.optim_type="RAdam"'\
+#      'opt.tok_emb_dim=200' 'opt.emb_dim=800' 'opt.epoch=400' 'opt.batch_size=256'\
+#      'opt.keep_edges="relational"' 'opt.neg_method="graph_neigh"' 'opt.neg_size=128'\
+#      'opt.train_from_checkpoint="checkpoints/HAKEGCN/exp_85_MSCG-ReVerb.best.ckpt"' 'opt.optim_lr=3e-4'
+
+# Oct 7
+# ablations
+# python -m scripts.train_HAKEGCN with 'motivation="ablation wo do_polar_conv"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.do_polar_conv=False'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=800'
+python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.new_score_func=False'\
+     'opt.tok_emb_dim=500' 'opt.epoch=800'
+python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMeidical-ReVerb"' 'opt.new_score_func=False'\
+     'opt.tok_emb_dim=500' 'opt.epoch=800'
+python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
+     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.new_score_func=False'\
+     'opt.tok_emb_dim=500' 'opt.epoch=800'
