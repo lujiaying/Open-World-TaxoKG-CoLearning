@@ -1,6 +1,7 @@
 import random
 from collections import Counter
 from typing import Dict
+import math
 
 import torch as th
 
@@ -148,6 +149,38 @@ def cal_Shannon_diversity_index(all_preds_idx: list) -> float:
     p = th.FloatTensor(list(p.values())) / sum(p.values())
     H = (-p * th.log(p)).sum().item()
     return H
+
+
+def cal_Simpson_index(all_preds_idx: list) -> float:
+    """
+    The less the better..
+    """
+    # all_preds_idx size = (n, topk)
+    p = Counter()
+    for preds_idx in all_preds_idx:
+        for idx in preds_idx:
+            p[idx] += 1
+    # p = th.FloatTensor(list(p.values())) / sum(p.values())
+    # S_index = (p ** 2).sum().item()
+    n = th.FloatTensor(list(p.values()))
+    N = n.sum()
+    S_index = (n*(n-1)).sum() / (N*(N-1))
+    return S_index
+
+
+def cal_Pielou_eveness_index(all_preds_idx) -> float:
+    """
+    https://en.wikipedia.org/wiki/Species_evenness
+    """
+    p = Counter()
+    for preds_idx in all_preds_idx:
+        for idx in preds_idx:
+            p[idx] += 1
+    S = len(p)
+    H_max = math.log(S)
+    p = th.FloatTensor(list(p.values())) / sum(p.values())
+    H = (-p * th.log(p)).sum().item()
+    return H / H_max
 
 
 def cal_freshness_per_sample(gold: list, pred: list) -> float:

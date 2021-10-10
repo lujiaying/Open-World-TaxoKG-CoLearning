@@ -22,14 +22,18 @@ from model.data_loader import HAKETrainDst
 from model.TaxoRelGraph import TokenEncoder
 from model.HAKE import HAKEGCNEncoder, HAKEGCNScorer
 from utils.metrics import cal_AP_atk, cal_reciprocal_rank, cal_OLP_metrics
-from utils.metrics import cal_Shannon_diversity_index, cal_freshness_per_sample
+from utils.metrics import cal_Shannon_diversity_index, cal_freshness_per_sample, cal_Pielou_eveness_index
+from .train_HAKEGCN import test_CGC_task, test_OLP_task
 
 
 # Sacred Setup
 ex = sacred.Experiment('test_HAKEGCN')
 
+N_diversity_CG = 30
+N_diversity_OKG = 50
 
-def produce_human_eval_cg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn.Module, scorer: th.nn.Module, 
+
+def produce_human_eval_cg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn.Module, scorer: th.nn.Module,
                                   cg_iter: DataLoader, tok_vocab: dict, all_phrase2id: dict,
                                   test_G: dgl.DGLGraph, test_g_nid_map: dict,
                                   concept_vocab: dict, opt: dict, device: th.device,
@@ -64,10 +68,10 @@ def produce_human_eval_cg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn.
                 ent = test_G.ndata['phrid'][h_nids[i]]
                 ent = id2phrase[ent.item()]
                 gold_cepts = [id2concept[_] for _ in cep_ids_l[i]]
-                pred_cepts = [id2concept[_] for _ in pred_scores[i, :5].tolist()]
+                pred_cepts = [id2concept[_] for _ in pred_scores[i, :N_diversity_CG].tolist()]
                 all_preds.append(pred_cepts)
-                macro_freshness.append(cal_freshness_per_sample(gold_cepts, pred_cepts))
-                out_line = '%s\t%s\t%s\n' % (ent, ','.join(gold_cepts), ','.join(pred_cepts))
+                macro_freshness.append(cal_freshness_per_sample(gold_cepts, pred_cepts[:5]))
+                out_line = '%s\t%s\t%s\n' % (ent, ','.join(gold_cepts), ','.join(pred_cepts[:5]))
                 fwrite.write(out_line)
                 cnt += 1
                 if cnt > 400:
@@ -76,8 +80,9 @@ def produce_human_eval_cg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn.
                 break
     fwrite.close()
     macro_freshness = sum(macro_freshness) / len(macro_freshness)
-    diversity = cal_Shannon_diversity_index(all_preds)
-    print('CGC freshness=%.2f, diversity=%.2f' % (macro_freshness, diversity))
+    # diversity = cal_Shannon_diversity_index(all_preds)
+    diversity = cal_Pielou_eveness_index(all_preds)
+    print('CGC freshness=%.3f, diversity=%.3f' % (macro_freshness, diversity))
     return
 
 
@@ -118,11 +123,11 @@ def produce_human_eval_okg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn
             # tail pred
             pred_tails = scorer((h_embs, r_embs, cand_embs_batch), BatchType.TAIL_BATCH)  # (B, ment_cnt)
             pred_tails = pred_tails.argsort(dim=1, descending=True)
-            pred_tails = pred_tails[:, :5]
+            pred_tails = pred_tails[:, :N_diversity_OKG]
             # head pred
             pred_heads = scorer((cand_embs_batch, r_embs, t_embs), BatchType.HEAD_BATCH)  # (B, ment_cnt)
             pred_heads = pred_heads.argsort(dim=1, descending=True)
-            pred_heads = pred_heads[:, :5]
+            pred_heads = pred_heads[:, :N_diversity_OKG]
             for i in range(B):
                 h_phrase = id2ment[h_mids[i]]
                 r_phrase = id2phr[r_pids[i]]
@@ -132,21 +137,23 @@ def produce_human_eval_okg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn
                 visited_hr.add((h_phrase, r_phrase))
                 gold_t_phrases = all_triple_ids_map['h'][(h_mids[i], r_pids[i])]
                 gold_t_phrases = [id2ment[_] for _ in gold_t_phrases]
-                pred_t_phrases = pred_tails[i, :5].tolist()
+                pred_t_phrases = pred_tails[i, :].tolist()
                 pred_t_phrases = [id2ment[_] for _ in pred_t_phrases]
                 all_preds.append(pred_t_phrases)
-                macro_freshness.append(cal_freshness_per_sample(gold_t_phrases, pred_t_phrases))
-                out_line = '%s-> %s\t%s\t%s\n' % (h_phrase, r_phrase, ','.join(gold_t_phrases),
-                                                  ','.join(pred_t_phrases))
+                macro_freshness.append(cal_freshness_per_sample(gold_t_phrases, pred_t_phrases[:5]))
+                # gold_t, gold_h might contains more than 20 entities
+                # e.g. in MSCG-OPIEC <?, be in, UK>
+                out_line = '%s-> %s\t%s\t%s\n' % (h_phrase, r_phrase, ','.join(gold_t_phrases[:10]),
+                                                  ','.join(pred_t_phrases[:5]))
                 fwrite.write(out_line)
                 gold_h_phrases = all_triple_ids_map['t'][(t_mids[i], r_pids[i])]
                 gold_h_phrases = [id2ment[_] for _ in gold_h_phrases]
-                pred_h_phrases = pred_heads[i, :5].tolist()
+                pred_h_phrases = pred_heads[i, :].tolist()
                 pred_h_phrases = [id2ment[_] for _ in pred_h_phrases]
                 all_preds.append(pred_h_phrases)
-                macro_freshness.append(cal_freshness_per_sample(gold_h_phrases, pred_h_phrases))
-                out_line = '%s <-%s\t%s\t%s\n' % (t_phrase, r_phrase, ','.join(gold_h_phrases),
-                                                  ','.join(pred_h_phrases))
+                macro_freshness.append(cal_freshness_per_sample(gold_h_phrases, pred_h_phrases[:5]))
+                out_line = '%s <-%s\t%s\t%s\n' % (t_phrase, r_phrase, ','.join(gold_h_phrases[:10]),
+                                                  ','.join(pred_h_phrases[:5]))
                 fwrite.write(out_line)
                 cnt += 2
                 if cnt > 400:
@@ -155,8 +162,9 @@ def produce_human_eval_okg_triples(tok_encoder: th.nn.Module, gcn_encoder: th.nn
                 break
     fwrite.close()
     macro_freshness = sum(macro_freshness) / len(macro_freshness)
-    diversity = cal_Shannon_diversity_index(all_preds)
-    print('OLP freshness=%.2f, diversity=%.2f' % (macro_freshness, diversity))
+    # diversity = cal_Shannon_diversity_index(all_preds)
+    diversity = cal_Pielou_eveness_index(all_preds)
+    print('OLP freshness=%.3f, diversity=%.3f' % (macro_freshness, diversity))
     return
 
 
@@ -219,15 +227,26 @@ def test_model(config_path, checkpoint_path, human_eval_path, _run, _log):
     scorer.eval()
     # start generating human eval
     test_G = test_G.to(device)
-    if not os.path.exists(human_eval_path):
-        os.makedirs(human_eval_path)
-    cgc_out_path = '%s/cgc_preds.csv' % (human_eval_path)
-    produce_human_eval_cg_triples(tok_encoder, gcn_encoder, scorer, test_cg_iter,
-                                  tok_vocab, all_phrase2id, test_G, test_g_nid_map,
-                                  concept_vocab, opt, device, cgc_out_path)
-    olp_out_path = '%s/olp_preds.csv' % (human_eval_path)
-    produce_human_eval_okg_triples(tok_encoder, gcn_encoder, scorer,
-                                   test_olp_iter, tok_vocab, all_phrase2id,
-                                   test_G, test_g_nid_map,
-                                   olp_ment_vocab, opt, device, all_triple_ids_map,
-                                   olp_out_path)
+    if human_eval_path:
+        if not os.path.exists(human_eval_path):
+            os.makedirs(human_eval_path)
+        cgc_out_path = '%s/cgc_preds.csv' % (human_eval_path)
+        produce_human_eval_cg_triples(tok_encoder, gcn_encoder, scorer, test_cg_iter,
+                                      tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                      concept_vocab, opt, device, cgc_out_path)
+        olp_out_path = '%s/olp_preds.csv' % (human_eval_path)
+        produce_human_eval_okg_triples(tok_encoder, gcn_encoder, scorer,
+                                       test_olp_iter, tok_vocab, all_phrase2id,
+                                       test_G, test_g_nid_map,
+                                       olp_ment_vocab, opt, device, all_triple_ids_map,
+                                       olp_out_path)
+    else:
+        MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
+                                                  tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                                  concept_vocab, opt, device)
+        _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
+        OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
+                                               test_olp_iter, tok_vocab, all_phrase2id,
+                                               test_G, test_g_nid_map,
+                                               olp_ment_vocab, opt, device, all_triple_ids_map)
+        _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))

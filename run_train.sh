@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=TaxoKG
 #SBATCH --gres=gpu:1
-#SBATCH --output=logs/slurm_Oct7_HAKEGCN
+#SBATCH --output=logs/slurm_HAKEGCN
 
 # Jun 9
 # python -m scripts.train_transE with 'motivation="Param from Nguyen 2018"' \
@@ -198,7 +198,8 @@
 #     'opt.batch_size=512' 'opt.neg_size=64' 'opt.emb_dim=200'
 # python -m scripts.train_openHAKE with 'motivation="MSCG, ReRun"'\
 #     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.epoch=200'\
-#     'opt.batch_size=512' 'opt.neg_size=64' 'opt.emb_dim=200'
+#     'opt.batch_size=512' 'opt.neg_size=64' 'opt.emb_dim=200' 'opt.gamma=16'\
+#     'opt.mod_w=0.5' 'opt.seed=1993'
 
 # Sep 9
 # python -m scripts.train_HAKEGCN with 'motivation="HAKEGCN default setting"'\
@@ -263,14 +264,14 @@
 #      'opt.tok_emb_dim=500' 'opt.epoch=1000' 'opt.batch_size=256' 'opt.keep_edges="taxonomic"'
 
 # Oct 1
-# python -m scripts.train_HAKEGCN with 'motivation="relational edges only"'\
+# python -m scripts.train_HAKEGCN with 'motivation="both edges"'\
 #      'opt.gpu=True' 'opt.dataset_type="MSCG-OPIEC"' 'opt.optim_type="RAdam"'\
 #      'opt.tok_emb_dim=200' 'opt.emb_dim=800' 'opt.epoch=400'\
-#      'opt.batch_size=512' 'opt.keep_edges="relational"'
-# python -m scripts.train_HAKEGCN with 'motivation="relational edges only"'\
-#      'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.optim_type="RAdam"'\
-#      'opt.tok_emb_dim=200' 'opt.emb_dim=800' 'opt.epoch=400'\
-#      'opt.batch_size=256' 'opt.keep_edges="relational"'
+#      'opt.batch_size=512' 'opt.keep_edges="both"'
+python -m scripts.train_HAKEGCN with 'motivation="relational edges only"'\
+     'opt.gpu=True' 'opt.dataset_type="MSCG-ReVerb"' 'opt.optim_type="RAdam"'\
+     'opt.tok_emb_dim=200' 'opt.emb_dim=400' 'opt.epoch=400'\
+     'opt.batch_size=64' 'opt.keep_edges="relational"' 'opt.gamma=16'
  
 # Oct 4
 # python -m scripts.train_HAKEGCN with 'motivation="RAdam, gcn_type=specific; sum KG, max taxo"'\
@@ -292,12 +293,16 @@
 # python -m scripts.train_HAKEGCN with 'motivation="ablation wo do_polar_conv"'\
 #      'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.do_polar_conv=False'\
 #      'opt.tok_emb_dim=500' 'opt.epoch=800'
-python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.new_score_func=False'\
-     'opt.tok_emb_dim=500' 'opt.epoch=800'
-python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMeidical-ReVerb"' 'opt.new_score_func=False'\
-     'opt.tok_emb_dim=500' 'opt.epoch=800'
-python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
-     'opt.gpu=True' 'opt.dataset_type="SEMusic-ReVerb"' 'opt.new_score_func=False'\
-     'opt.tok_emb_dim=500' 'opt.epoch=800'
+# python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMusic-OPIEC"' 'opt.new_score_func=False'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=800'
+# python -m scripts.train_HAKEGCN with 'motivation="ablation wo g_samp"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-OPIEC"' 'opt.g_edge_sampling=0.0'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=800'
+
+# python -m scripts.train_HAKEGCN with 'motivation="ablation wo new_score_func; relational edges"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.new_score_func=False'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=800' 'opt.keep_edges="relational"'
+# python -m scripts.train_HAKEGCN with 'motivation="ablation wo g_samp; relational edges"'\
+#      'opt.gpu=True' 'opt.dataset_type="SEMedical-ReVerb"' 'opt.g_edge_sampling=0.0'\
+#      'opt.tok_emb_dim=500' 'opt.epoch=800' 'opt.keep_edges="relational"'
