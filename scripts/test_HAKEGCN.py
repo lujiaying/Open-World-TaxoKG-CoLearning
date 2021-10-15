@@ -192,15 +192,27 @@ def test_model(config_path, checkpoint_path, human_eval_path, _run, _log):
     # Set up
     dataset_dir = opt['dataset_dir'][opt['dataset_type']]
     device = th.device('cuda') if opt['gpu'] else th.device('cpu')
+    if 'gcn_layer' not in opt:
+        opt['gcn_layer'] = 2
+    if 'gcn_type' not in opt:
+        opt['gcn_type'] = 'uniform'
+    if 'do_polar_conv' not in opt:
+        opt['do_polar_conv'] = True
+    if 'new_score_func' not in opt:
+        opt['new_score_func'] = True
+    if 'keep_edges' not in opt:
+        opt['keep_edges'] = 'both'
     # Load corpus
     train_set_head_batch, train_set_tail_batch,\
         dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,\
         all_triple_ids_map, olp_ment_vocab, tok_vocab, concept_vocab,\
         all_phrase2id, train_G, train_g_nid_map, test_G, test_g_nid_map\
-        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'])
+        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'], opt['keep_edges'])
     _log.info('[%s] Load dataset Done, len=%d(tr), %d(CGC-dev)|%d(OLP-dev), %d(CGC-tst)|%d(OLP-tst)' % (time.ctime(),
               len(train_set_head_batch), len(dev_cg_set), len(dev_olp_set), len(test_cg_set), len(test_olp_set)))
     _log.info('Train G info=%s; Test G info=%s' % (train_G, test_G))
+    dev_cg_iter = DataLoader(dev_cg_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
+                             batch_size=opt['batch_size'], shuffle=False)
     test_cg_iter = DataLoader(test_cg_set, collate_fn=CompGCNCGCTripleDst.collate_fn,
                               batch_size=opt['batch_size'], shuffle=False)
     test_olp_iter = DataLoader(test_olp_set, collate_fn=CompGCNOLPTripleDst.collate_fn,
@@ -209,13 +221,10 @@ def test_model(config_path, checkpoint_path, human_eval_path, _run, _log):
               len(all_phrase2id), len(concept_vocab)))
     # Build model
     tok_encoder = TokenEncoder(len(tok_vocab), opt['tok_emb_dim']).to(device)
-    if 'gcn_layer' not in opt:
-        opt['gcn_layer'] = 2
-    if 'gcn_type' not in opt:
-        opt['gcn_type'] = 'uniform'
     gcn_encoder = HAKEGCNEncoder(opt['tok_emb_dim'], opt['emb_dropout'], opt['emb_dim'],
                                  opt['gcn_layer'], opt['gcn_type']).to(device)
-    scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w']).to(device)
+    scorer = HAKEGCNScorer(opt['emb_dim'], opt['gamma'], opt['mod_w'], opt['pha_w'],
+                           opt['do_polar_conv'], opt['new_score_func']).to(device)
     _log.info('[%s] Model build Done. Use device=%s' % (time.ctime(), device))
     # Load checkpoint
     checkpoint = th.load(checkpoint_path)
@@ -241,6 +250,11 @@ def test_model(config_path, checkpoint_path, human_eval_path, _run, _log):
                                        olp_ment_vocab, opt, device, all_triple_ids_map,
                                        olp_out_path)
     else:
+        MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
+                                                  tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                                  concept_vocab, opt, device)
+        _log.info('[%s] CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
+                  (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
         MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
                                                   tok_vocab, all_phrase2id, test_G, test_g_nid_map,
                                                   concept_vocab, opt, device)

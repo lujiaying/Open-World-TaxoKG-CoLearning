@@ -377,6 +377,8 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
     v_l = []
     edge_pids = []
     edge_istaxo = []  # True means is taxo edge, otherwise False
+    cg_ent_set = set()
+    edge_samp_prob = []  # 1 for cg edge and okg edge with 0 node hit, 3 for okg edge with 1 node hit, 5 for okg edge with 2 node hit
     for ent, ceps in cg_pairs_train.items():
         if ent not in train_g_nid_map:
             train_g_nid_map[ent] = len(train_g_nid_map)
@@ -387,6 +389,9 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
             v_l.append(train_g_nid_map[cep])
             edge_pids.append(all_phrase2id[TAXO_EDGE])
             edge_istaxo.append(True)
+            cg_ent_set.add(cep)
+            edge_samp_prob.append(1.0)
+        cg_ent_set.add(ent)
     for (s, r, o) in oie_triples_train:
         if s not in train_g_nid_map:
             train_g_nid_map[s] = len(train_g_nid_map)
@@ -396,6 +401,12 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
         v_l.append(train_g_nid_map[o])
         edge_pids.append(all_phrase2id[r])
         edge_istaxo.append(False)
+        if (s not in cg_ent_set) and (o not in cg_ent_set):
+            edge_samp_prob.append(1.0)
+        elif (s in cg_ent_set) and (o in cg_ent_set):
+            edge_samp_prob.append(5.0)
+        else:
+            edge_samp_prob.append(3.0)
     train_G = dgl.graph((u_l, v_l))
     node_pids = [[] for _ in range(len(train_g_nid_map))]
     for node, nid in train_g_nid_map.items():
@@ -404,6 +415,8 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
     train_G.edata['phrid'] = th.LongTensor(edge_pids)
     # This is to distinguish with internal etype in hetero graph
     train_G.edata['isTaxo'] = th.BoolTensor(edge_istaxo)
+    # for discarding prob
+    train_G.edata['samp_p'] = 1.0 / th.FloatTensor(edge_samp_prob)
     if keep_edges == 'both':
         pass
     elif keep_edges == 'relational':

@@ -373,7 +373,13 @@ def main(opt, _run, _log):
         for i_batch, batch in enumerate(train_iter_head_batch):
             # conduct graph edge sampling per batch
             if opt['g_edge_sampling'] > 0.0:
-                edge_mask = th.rand(train_G.num_edges()) >= opt['g_edge_sampling']
+                # uniform discard
+                # edge_mask = th.rand(train_G.num_edges()) >= opt['g_edge_sampling']
+                edge_cnt = train_G.num_edges()
+                k = round(edge_cnt * opt['g_edge_sampling'])
+                edge_mask = set(random.choices(range(edge_cnt), weights=train_G.edata['samp_p'], k=k))
+                edge_mask = [False if _ in edge_mask else True for _ in range(edge_cnt)]
+                edge_mask = th.tensor(edge_mask)
                 train_sG = dgl.edge_subgraph(train_G, edge_mask, relabel_nodes=False)
             else:
                 train_sG = train_G
