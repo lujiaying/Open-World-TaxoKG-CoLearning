@@ -55,7 +55,16 @@ conda activate taxoKG
 The porposed HAKEGCN model checkpoints can be downloaded from https://figshare.com/s/96647c8dc7f9e73988cc.  
 Please decompress them under `./checkpoints` folder.
 
-Script of getting the reported numbers for the main experiments (Table 1, 2, 3): 
+Examples of getting the reported numbers for the main experiments (Table 1, 2, 3): 
 ```
-sh 
+sh run_reproduce.sh
+```
+
+Notes for using `run_reproduce.sh`:  
+L2-L4 just contains the set-ups for SLURM. I add it because I am working on a SLURM controled GPU server.
+You don't need to change anything to run it.
+```
+#SBATCH --job-name=Reproduce-TaxoKG 
+#SBATCH --gres=gpu:1 
+#SBATCH --output=logs/slurm_reproduce_HAKEGCN 
 ```
