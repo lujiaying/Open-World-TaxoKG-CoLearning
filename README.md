@@ -51,3 +51,11 @@ conda activate taxoKG
 ```
 
 ## Reproduce Results
+
+The porposed HAKEGCN model checkpoints can be downloaded from https://figshare.com/s/96647c8dc7f9e73988cc.  
+Please decompress them under `./checkpoints` folder.
+
+Script of getting the reported numbers for the main experiments (Table 1, 2, 3): 
+```
+sh 
+```

@@ -93,15 +93,15 @@
 # python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN_by_Oct/73/config.json"'\
 #       'checkpoint_path="checkpoints/HAKEGCN_by_Oct/exp_73_SEMusic-OPIEC.best.ckpt"'\
 #       'human_eval_path="human_eval/neigh_impact/both/SEMusic-OPIEC/"'
-python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/17/config.json"'\
-     'checkpoint_path="checkpoints/HAKEGCN/exp_17_MSCG-OPIEC.best.ckpt"'\
-     'human_eval_path="human_eval/neigh_impact/taxonomic/MSCG-OPIEC/"'
-python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN_by_Oct/84/config.json"'\
-     'checkpoint_path="checkpoints/HAKEGCN_by_Oct/exp_84_MSCG-OPIEC.best.ckpt"'\
-     'human_eval_path="human_eval/neigh_impact/relational/MSCG-OPIEC/"'
-python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/18/config.json"'\
-      'checkpoint_path="checkpoints/HAKEGCN/exp_18_MSCG-OPIEC.best.ckpt"'\
-      'human_eval_path="human_eval/neigh_impact/both/MSCG-OPIEC/"'
+# python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/17/config.json"'\
+#      'checkpoint_path="checkpoints/HAKEGCN/exp_17_MSCG-OPIEC.best.ckpt"'\
+#      'human_eval_path="human_eval/neigh_impact/taxonomic/MSCG-OPIEC/"'
+# python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN_by_Oct/84/config.json"'\
+#      'checkpoint_path="checkpoints/HAKEGCN_by_Oct/exp_84_MSCG-OPIEC.best.ckpt"'\
+#      'human_eval_path="human_eval/neigh_impact/relational/MSCG-OPIEC/"'
+# python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/18/config.json"'\
+#       'checkpoint_path="checkpoints/HAKEGCN/exp_18_MSCG-OPIEC.best.ckpt"'\
+#       'human_eval_path="human_eval/neigh_impact/both/MSCG-OPIEC/"'
 
 
 # python -m scripts.test_HAKEGCN with 'config_path="logs/HAKEGCN/19/config.json"'\

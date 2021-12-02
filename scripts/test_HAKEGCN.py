@@ -250,15 +250,15 @@ def test_model(config_path, checkpoint_path, human_eval_path, _run, _log):
                                        olp_ment_vocab, opt, device, all_triple_ids_map,
                                        olp_out_path)
     else:
-        MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
-                                                  tok_vocab, all_phrase2id, test_G, test_g_nid_map,
-                                                  concept_vocab, opt, device)
-        _log.info('[%s] CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
-                  (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
+        # MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
+        #                                           tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+        #                                           concept_vocab, opt, device)
+        # _log.info('[%s] CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
+        #           (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
         MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
                                                   tok_vocab, all_phrase2id, test_G, test_g_nid_map,
                                                   concept_vocab, opt, device)
-        _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
+        _log.info('[%s] CGC TEST, MAP=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, P1, P3, P10))
         OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
                                                test_olp_iter, tok_vocab, all_phrase2id,
                                                test_G, test_g_nid_map,
