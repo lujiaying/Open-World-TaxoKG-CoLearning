@@ -1,6 +1,6 @@
 # Open-World Taxonomy and Knowledge Graph Co-Learning
 
-Code for the WWW 2022 submission "Open-World Taxonomy and Knowledge Graph Co-Learning".
+Code for the manuscript submission "Open-World Taxonomy and Knowledge Graph Co-Learning".
 
 - [Datasets](#datasets)
 - [Prerequisites](#prerequisites)
