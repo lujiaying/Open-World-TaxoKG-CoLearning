@@ -1,6 +1,6 @@
 """
 Evaluate CountInfer
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Aug 24, 2021
 """
 from collections import defaultdict

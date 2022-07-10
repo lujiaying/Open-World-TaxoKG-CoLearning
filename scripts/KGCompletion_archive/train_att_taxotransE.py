@@ -2,7 +2,7 @@
 Training and evaluate Att-Taxo-TransE
 Can not apply big sparse adjacency matrix,
 as many operations are not multiplications.
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 22, 2021
 """
 

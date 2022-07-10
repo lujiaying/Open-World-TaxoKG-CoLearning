@@ -1,6 +1,6 @@
 """ 
 Get concepts in commonsenseqa
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: May 12, 2021
 """
 

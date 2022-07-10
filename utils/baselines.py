@@ -1,6 +1,6 @@
 """
 Heuristic Baselines
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: May 19, 2021
 """
 

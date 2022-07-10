@@ -1,6 +1,6 @@
 """
 Adapted from https://github.com/MIRALab-USTC/KGE-HAKE/blob/master/codes/models.py
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Aug 25, 2021
 """
 from typing import Tuple

@@ -1,6 +1,6 @@
 """
 Derive taxonomy from conceptnet
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Apr 25, 2021
 """
 

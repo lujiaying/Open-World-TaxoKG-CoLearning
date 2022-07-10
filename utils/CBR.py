@@ -2,7 +2,7 @@
 Case-based reasoning
 From Das et al., A Simple Approach to Case-Based Reasoning in Knowledge Bases,
 Probabilistic Case-based Reasoning for Open-World Knowledge Graph Completion
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 1, 2021
 """
 

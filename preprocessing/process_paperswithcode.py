@@ -1,6 +1,6 @@
 """
 Extract triples from paperswithcode released data
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Apr 11, 2021
 """
 

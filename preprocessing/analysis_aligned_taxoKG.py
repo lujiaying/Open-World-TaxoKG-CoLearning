@@ -1,6 +1,6 @@
 """
 Analysis entity, relation distribution
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Oct 13, 2021
 """
 

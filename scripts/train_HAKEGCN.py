@@ -1,6 +1,6 @@
 """
 Training and evaluate HAKEGCN using one big graph one shot projection
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Sep 10, 2021
 """
 

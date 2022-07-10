@@ -1,6 +1,6 @@
 """
 Training and evaluate TaxoRelGraph
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 26, 2021
 """
 

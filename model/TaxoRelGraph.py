@@ -1,7 +1,7 @@
 """
 Infer CGC by aggregate relation(bi-direction)
 Infer OLP by aggregate taxonomy
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 15, 2021
 
 Notes:

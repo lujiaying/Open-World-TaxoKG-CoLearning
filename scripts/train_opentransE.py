@@ -1,6 +1,6 @@
 """
 Training and evaluate OpenKG - TransE
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 13, 2021
 """
 

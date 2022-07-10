@@ -1,6 +1,6 @@
 """
 Data Loaders for HAKEGCN
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Sep 8, 2021
 """
 

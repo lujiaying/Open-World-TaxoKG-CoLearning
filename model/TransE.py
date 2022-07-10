@@ -1,7 +1,7 @@
 """
 Adapted from https://github.com/mklimasz/TransE-PyTorch/,
   and Can We Predict New Facts with Open Knowledge Graph Embeddings?
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 15, 2021
 """
 from typing import Tuple

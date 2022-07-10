@@ -1,6 +1,6 @@
 """
 Training and evaluate Taxo-TransE
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 9, 2021
 """
 

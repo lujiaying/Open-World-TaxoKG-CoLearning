@@ -1,6 +1,6 @@
 """
 Case study and analysis of Taxo-TransE
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 20, 2021
 """
 

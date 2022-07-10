@@ -1,6 +1,6 @@
 """
 Training and evaluate TransE
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 7, 2021
 """
 

@@ -1,6 +1,6 @@
 """
 Analysis entity percentage of IsA relation
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 9, 2021
 """
 import re

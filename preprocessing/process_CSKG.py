@@ -1,6 +1,6 @@
 """
 Analysis on WN18RR, CN-100K
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: May 18, 2021
 """
 

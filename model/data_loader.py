@@ -1,6 +1,6 @@
 """
 Data Loaders for CGC-OLP-BENCH
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jul 14, 2021
 """
 from collections import defaultdict

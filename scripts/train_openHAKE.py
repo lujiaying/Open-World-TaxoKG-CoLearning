@@ -1,6 +1,6 @@
 """
 Training and evaluate OpenKG - HAKE
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Aug 25, 2021
 """
 

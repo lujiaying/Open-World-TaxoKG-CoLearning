@@ -1,6 +1,6 @@
 """
 CompGCN for CGC-OLP-Bench
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Sep 24, 2021
 """
 from typing import Tuple

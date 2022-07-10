@@ -1,6 +1,6 @@
 """
 Extract triples from fewrel
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Apr 26, 2021
 """
 

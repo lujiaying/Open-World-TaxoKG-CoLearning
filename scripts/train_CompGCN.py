@@ -1,6 +1,6 @@
 """
 Training and evaluate CompGCN
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Aug 8, 2021
 """
 

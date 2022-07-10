@@ -1,6 +1,6 @@
 """
 Align entity in Concept Graph and OpenIE facts
-Author: Jiaying Lu
+Author: Anonymous Siamese
 Create Date: Jun 29, 2021
 """
 
