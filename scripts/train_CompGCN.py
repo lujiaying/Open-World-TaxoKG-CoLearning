@@ -45,6 +45,7 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
+           'dataset_mix_mode': 'both',   # OKG_only, TAXO_only, both
            'epoch': 500,
            'validate_freq': 10,
            'batch_size': 128,
@@ -173,7 +174,7 @@ def main(opt, _run, _log):
     (train_set, dev_CGC_set, test_CGC_set,
      dev_OLP_set, test_OLP_set,
      tok_vocab, node_vocab, edge_vocab,
-     mention_vocab, concept_vocab, all_oie_triples_map) = prepare_ingredients_CompGCN(dataset_dir)
+     mention_vocab, concept_vocab, all_oie_triples_map) = prepare_ingredients_CompGCN(dataset_dir, mix_mode=opt['dataset_mix_mode'])
     _log.info('[%s] #node_vocab=%d, #edge_vocab=%d, #ment_vocab=%d, #cep_vocab=%d' % (time.ctime(),
               len(node_vocab), len(edge_vocab), len(mention_vocab), len(concept_vocab)))
     train_iter = DataLoader(train_set, collate_fn=CGCOLPGraphTrainDst.collate_fn,
@@ -246,23 +247,29 @@ def main(opt, _run, _log):
             edge_tok_embs = token_encoder(edge_toks.to(device), edge_tok_lens.to(device))
             node_embs = compgcn_transe.get_all_node_embs(g, node_tok_embs, edge_tok_embs)
             edge_embs = compgcn_transe.get_all_edge_embs(edge_tok_embs)
-            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, dev_CGC_iter, node_embs,
-                                                      edge_embs, node_vocab, concept_vocab, device)
-            _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
-            _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
-            _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
-            _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
-            _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
-            _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(),
-                      i_epoch, MAP, CGC_MRR, P1, P3, P10))
-            OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, dev_OLP_iter, node_embs, edge_embs,
-                                                   node_vocab, mention_vocab, all_oie_triples_map, device)
-            _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
-            _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
-                      i_epoch, OLP_MRR, H10, H30, H50))
+            if opt['dataset_mix_mode'] != 'OKG_only':
+                MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, dev_CGC_iter, node_embs,
+                                                          edge_embs, node_vocab, concept_vocab, device)
+                _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
+                _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
+                _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
+                _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
+                _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
+                _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(),
+                          i_epoch, MAP, CGC_MRR, P1, P3, P10))
+            else:
+                CGC_MRR = 0.0
+            if opt['dataset_mix_mode'] != 'TAXO_only':
+                OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, dev_OLP_iter, node_embs, edge_embs,
+                                                       node_vocab, mention_vocab, all_oie_triples_map, device)
+                _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
+                _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
+                          i_epoch, OLP_MRR, H10, H30, H50))
+            else:
+                OLP_MRR = 0.0
             if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR - best_sum_MRR > 1e-5:
                 sum_MRR = w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR
                 _log.info('Save best model at eopoch#%d, prev sum_MRR=%.3f, cur sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)' % (
@@ -296,18 +303,20 @@ def main(opt, _run, _log):
     g = train_set.graph.to(device)
     node_embs = compgcn_transe.get_all_node_embs(g, node_tok_embs, edge_tok_embs)
     edge_embs = compgcn_transe.get_all_edge_embs(edge_tok_embs)
-    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, test_CGC_iter, node_embs,
-                                              edge_embs, node_vocab, concept_vocab, device)
-    _run.log_scalar("test.CGC.MAP", MAP)
-    _run.log_scalar("test.CGC.MRR", CGC_MRR)
-    _run.log_scalar("test.CGC.P@1", P1)
-    _run.log_scalar("test.CGC.P@3", P3)
-    _run.log_scalar("test.CGC.P@10", P10)
-    _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
-    OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, test_OLP_iter, node_embs, edge_embs,
-                                           node_vocab, mention_vocab, all_oie_triples_map, device)
-    _run.log_scalar("test.OLP.MRR", OLP_MRR, i_epoch)
-    _run.log_scalar("test.OLP.Hits@10", H10, i_epoch)
-    _run.log_scalar("test.OLP.Hits@30", H30, i_epoch)
-    _run.log_scalar("test.OLP.Hits@50", H50, i_epoch)
-    _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))
+    if opt['dataset_mix_mode'] != 'OKG_only':
+        MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(compgcn_transe, test_CGC_iter, node_embs,
+                                                  edge_embs, node_vocab, concept_vocab, device)
+        _run.log_scalar("test.CGC.MAP", MAP)
+        _run.log_scalar("test.CGC.MRR", CGC_MRR)
+        _run.log_scalar("test.CGC.P@1", P1)
+        _run.log_scalar("test.CGC.P@3", P3)
+        _run.log_scalar("test.CGC.P@10", P10)
+        _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
+    if opt['dataset_mix_mode'] != 'TAXO_only':
+        OLP_MRR, H10, H30, H50 = test_OLP_task(compgcn_transe, test_OLP_iter, node_embs, edge_embs,
+                                               node_vocab, mention_vocab, all_oie_triples_map, device)
+        _run.log_scalar("test.OLP.MRR", OLP_MRR, i_epoch)
+        _run.log_scalar("test.OLP.Hits@10", H10, i_epoch)
+        _run.log_scalar("test.OLP.Hits@30", H30, i_epoch)
+        _run.log_scalar("test.OLP.Hits@50", H50, i_epoch)
+        _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))

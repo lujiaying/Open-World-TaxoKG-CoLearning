@@ -768,26 +768,39 @@ def get_uv_for_r(oie_triples_train: List[Tuple[str, str, str]]) -> Dict[str, set
     return r_uv_dict
 
 
-def prepare_ingredients_CompGCN(dataset_dir: str) -> tuple:
+def prepare_ingredients_CompGCN(dataset_dir: str, mix_mode: str = 'both') -> tuple:
     """
     one single big graph to get node, edge embeddings
     let all candidaites exist in graph. Candidate can be disconnected to other nodes.
+    Args:
+        mix_mode: choices from ['both', 'OKG_only', "TAXO_only']
     """
     # Load Concept Graph
-    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
-    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
-    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
-    cg_pairs_train = load_cg_pairs(cg_train_path)
-    cg_pairs_dev = load_cg_pairs(cg_dev_path)
-    cg_pairs_test = load_cg_pairs(cg_test_path)
-    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    if mix_mode != 'OKG_only':
+        cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+        cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+        cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+        cg_pairs_train = load_cg_pairs(cg_train_path)
+        cg_pairs_dev = load_cg_pairs(cg_dev_path)
+        cg_pairs_test = load_cg_pairs(cg_test_path)
+        concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    else:
+        cg_pairs_train = {}
+        cg_pairs_dev = {}
+        cg_pairs_test = {}
+        concept_vocab = {}
     # Load Open KG
-    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
-    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
-    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
-    oie_triples_train = load_oie_triples(oie_train_path)
-    oie_triples_dev = load_oie_triples(oie_dev_path)
-    oie_triples_test = load_oie_triples(oie_test_path)
+    if mix_mode != 'TAXO_only':
+        oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+        oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+        oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+        oie_triples_train = load_oie_triples(oie_train_path)
+        oie_triples_dev = load_oie_triples(oie_dev_path)
+        oie_triples_test = load_oie_triples(oie_test_path)
+    else:
+        oie_triples_train = []
+        oie_triples_dev = []
+        oie_triples_test = []
     tok_vocab = get_tok_vocab(cg_pairs_to_cg_triples(cg_pairs_train), oie_triples_train)
     mention_vocab, edge_vocab = get_mention_rel_vocabs(oie_triples_train, oie_triples_dev, oie_triples_test)
     edge_vocab[TAXO_EDGE] = len(edge_vocab)   # contains all possible semantic edges
@@ -974,24 +987,41 @@ class HAKETrainDst(data.Dataset):
         return two_hop_neighs
 
 
-def prepare_ingredients_HAKE(dataset_dir: str, neg_size: int) -> tuple:
+def prepare_ingredients_HAKE(dataset_dir: str, neg_size: int,
+        mix_mode: str = 'both') -> tuple:
+    """
+    Args:
+        mix_mode: choices from ['both', 'OKG_only', "TAXO_only']
+    """
     # Load Concept Graph
-    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
-    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
-    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
-    cg_pairs_train = load_cg_pairs(cg_train_path)
-    cg_pairs_dev = load_cg_pairs(cg_dev_path)
-    cg_pairs_test = load_cg_pairs(cg_test_path)
-    cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
-    # concept vocab as CGC test pool
-    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    if mix_mode != 'OKG_only':
+        cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+        cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+        cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+        cg_pairs_train = load_cg_pairs(cg_train_path)
+        cg_pairs_dev = load_cg_pairs(cg_dev_path)
+        cg_pairs_test = load_cg_pairs(cg_test_path)
+        cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
+        # concept vocab as CGC test pool
+        concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    else:
+        cg_pairs_train = {}
+        cg_pairs_dev = {}
+        cg_pairs_test = {}
+        cg_triples_train = []
+        concept_vocab = {}
     # Load Open KG
-    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
-    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
-    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
-    oie_triples_train = load_oie_triples(oie_train_path)
-    oie_triples_dev = load_oie_triples(oie_dev_path)
-    oie_triples_test = load_oie_triples(oie_test_path)
+    if mix_mode != 'TAXO_only':
+        oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+        oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+        oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+        oie_triples_train = load_oie_triples(oie_train_path)
+        oie_triples_dev = load_oie_triples(oie_dev_path)
+        oie_triples_test = load_oie_triples(oie_test_path)
+    else:
+        oie_triples_train = []
+        oie_triples_dev = []
+        oie_triples_test = []
     tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
     # get mention/rel vocab from all entity, concept, subj, obj in train
     train_mention_vocab = {}
@@ -1047,3 +1077,18 @@ if __name__ == '__main__':
     # train_iter = data.DataLoader(train_set, collate_fn=collate_fn_triples, batch_size=4, shuffle=True)
     # prepare_ingredients_TaxoRelGraph(dataset_dir)
     # prepare_ingredients_CompGCN(dataset_dir, 16)
+
+    # Aug 07, debug mix_mode
+    dataset_dir = 'data/CGC-OLP-BENCH/SEMusic-OPIEC'
+    (train_set_head_batch, train_set_tail_batch,
+            dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,
+            concept_vocab, tok_vocab, train_mention_vocab, train_rel_vocab,
+            all_mention_vocab, all_rel_vocab, all_triple_ids_map) = \
+            prepare_ingredients_HAKE(dataset_dir, neg_size=4, mix_mode='OKG_only')
+    print(f'concept_vocab={concept_vocab}, dev_cg_set.len={len(dev_cg_set)}')
+    train_mention_vocab_r = {v: k for k, v in train_mention_vocab.items()}
+    train_rel_vocab_r = {v: k for k, v in train_rel_vocab.items()}
+    for pos_triple, neg_triples, sub_w, batch_type in train_set_tail_batch:
+        print(f'{pos_triple}')
+        print(f'{pos_triple}: {train_mention_vocab_r[pos_triple[0].item()]}, {train_rel_vocab_r[pos_triple[1].item()]}, {train_mention_vocab_r[pos_triple[2].item()]} ')
+        exit(0)

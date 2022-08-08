@@ -48,6 +48,7 @@ def my_config():
                'SEMedical-OPIEC': "data/CGC-OLP-BENCH/SEMedical-OPIEC",
                'SEMusic-OPIEC': "data/CGC-OLP-BENCH/SEMusic-OPIEC",
                },
+           'dataset_mix_mode': 'both',   # OKG_only, TAXO_only, both
            'epoch': 700,
            'validate_freq': 10,
            'batch_size': 256,
@@ -295,7 +296,7 @@ def main(opt, _run, _log):
         dev_cg_set, test_cg_set, dev_olp_set, test_olp_set,\
         all_triple_ids_map, olp_ment_vocab, tok_vocab, concept_vocab,\
         all_phrase2id, train_G, train_g_nid_map, test_G, test_g_nid_map\
-        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'], opt['keep_edges'])
+        = prepare_ingredients_HAKEGCN(dataset_dir, opt['neg_method'], opt['neg_size'], opt['keep_edges'], mix_mode=opt['dataset_mix_mode'])
     _log.info('[%s] Load dataset Done, len=%d(tr), %d(CGC-dev)|%d(OLP-dev), %d(CGC-tst)|%d(OLP-tst)' % (time.ctime(),
               len(train_set_head_batch), len(dev_cg_set), len(dev_olp_set), len(test_cg_set), len(test_olp_set)))
     _log.info('Train G info=%s; Test G info=%s' % (train_G, test_G))
@@ -419,26 +420,32 @@ def main(opt, _run, _log):
             tok_encoder.eval()
             gcn_encoder.eval()
             scorer.eval()
-            MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
-                                                      tok_vocab, all_phrase2id, test_G, test_g_nid_map,
-                                                      concept_vocab, opt, device)
-            _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
-            _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
-            _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
-            _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
-            _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
-            _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
-                      (time.ctime(), i_epoch, MAP, CGC_MRR, P1, P3, P10))
-            OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
-                                                   dev_olp_iter, tok_vocab, all_phrase2id,
-                                                   test_G, test_g_nid_map,
-                                                   olp_ment_vocab, opt, device, all_triple_ids_map)
-            _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
-            _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
-            _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
-                      i_epoch, OLP_MRR, H10, H30, H50))
+            if opt['dataset_mix_mode'] != 'OKG_only':
+                MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, dev_cg_iter,
+                                                          tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                                          concept_vocab, opt, device)
+                _run.log_scalar("dev.CGC.MAP", MAP, i_epoch)
+                _run.log_scalar("dev.CGC.MRR", CGC_MRR, i_epoch)
+                _run.log_scalar("dev.CGC.P@1", P1, i_epoch)
+                _run.log_scalar("dev.CGC.P@3", P3, i_epoch)
+                _run.log_scalar("dev.CGC.P@10", P10, i_epoch)
+                _log.info('[%s] epoch#%d CGC evaluate, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' %
+                          (time.ctime(), i_epoch, MAP, CGC_MRR, P1, P3, P10))
+            else:
+                CGC_MRR = 0.0
+            if opt['dataset_mix_mode'] != 'TAXO_only':
+                OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
+                                                       dev_olp_iter, tok_vocab, all_phrase2id,
+                                                       test_G, test_g_nid_map,
+                                                       olp_ment_vocab, opt, device, all_triple_ids_map)
+                _run.log_scalar("dev.OLP.MRR", OLP_MRR, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@10", H10, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@30", H30, i_epoch)
+                _run.log_scalar("dev.OLP.Hits@50", H50, i_epoch)
+                _log.info('[%s] epoch#%d OLP evaluate, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(),
+                          i_epoch, OLP_MRR, H10, H30, H50))
+            else:
+                OLP_MRR = 0.0
             if w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR >= best_sum_MRR:
                 sum_MRR = w_CGC_MRR * CGC_MRR + (1-w_CGC_MRR) * OLP_MRR
                 _log.info('Save best model at eopoch#%d, prev best_sum_MRR=%.3f, cur best_sum_MRR=%.3f (CGC-%.3f,OLP-%.3f)'
@@ -462,21 +469,23 @@ def main(opt, _run, _log):
     scorer.load_state_dict(checkpoint['scorer'])
     scorer = scorer.to(device)
     scorer.eval()
-    MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
-                                              tok_vocab, all_phrase2id, test_G, test_g_nid_map,
-                                              concept_vocab, opt, device)
-    _run.log_scalar("test.CGC.MAP", MAP)
-    _run.log_scalar("test.CGC.MRR", CGC_MRR)
-    _run.log_scalar("test.CGC.P@1", P1)
-    _run.log_scalar("test.CGC.P@3", P3)
-    _run.log_scalar("test.CGC.P@10", P10)
-    _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
-    OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
-                                           test_olp_iter, tok_vocab, all_phrase2id,
-                                           test_G, test_g_nid_map,
-                                           olp_ment_vocab, opt, device, all_triple_ids_map)
-    _run.log_scalar("test.OLP.MRR", OLP_MRR)
-    _run.log_scalar("test.OLP.Hits@10", H10)
-    _run.log_scalar("test.OLP.Hits@30", H30)
-    _run.log_scalar("test.OLP.Hits@50", H50)
-    _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))
+    if opt['dataset_mix_mode'] != 'OKG_only':
+        MAP, CGC_MRR, P1, P3, P10 = test_CGC_task(tok_encoder, gcn_encoder, scorer, test_cg_iter,
+                                                  tok_vocab, all_phrase2id, test_G, test_g_nid_map,
+                                                  concept_vocab, opt, device)
+        _run.log_scalar("test.CGC.MAP", MAP)
+        _run.log_scalar("test.CGC.MRR", CGC_MRR)
+        _run.log_scalar("test.CGC.P@1", P1)
+        _run.log_scalar("test.CGC.P@3", P3)
+        _run.log_scalar("test.CGC.P@10", P10)
+        _log.info('[%s] CGC TEST, MAP=%.3f, MRR=%.3f, P@1,3,10=%.3f,%.3f,%.3f' % (time.ctime(), MAP, CGC_MRR, P1, P3, P10))
+    if opt['dataset_mix_mode'] != 'TAXO_only':
+        OLP_MRR, H10, H30, H50 = test_OLP_task(tok_encoder, gcn_encoder, scorer,
+                                               test_olp_iter, tok_vocab, all_phrase2id,
+                                               test_G, test_g_nid_map,
+                                               olp_ment_vocab, opt, device, all_triple_ids_map)
+        _run.log_scalar("test.OLP.MRR", OLP_MRR)
+        _run.log_scalar("test.OLP.Hits@10", H10)
+        _run.log_scalar("test.OLP.Hits@30", H30)
+        _run.log_scalar("test.OLP.Hits@50", H50)
+        _log.info('[%s] OLP TEST, MRR=%.3f, Hits@10,30,50=%.3f,%.3f,%.3f' % (time.ctime(), OLP_MRR, H10, H30, H50))

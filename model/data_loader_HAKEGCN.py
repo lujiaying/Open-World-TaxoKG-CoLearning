@@ -445,27 +445,42 @@ def construct_big_graphs(cg_pairs_train: dict, oie_triples_train: list,
     return ((train_G, train_g_nid_map), (test_G, test_g_nid_map))
 
 
-def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int, keep_edges: str = 'both') -> tuple:
+def prepare_ingredients_HAKEGCN(dataset_dir: str, neg_method: str, neg_size: int, keep_edges: str = 'both', 
+        mix_mode: str = 'both') -> tuple:
     """
     Two big graphs for trian/dev/test sets.
     For dev and test graphs, edges still from train set, but adds nodes.
+    Args:
+        mix_mode: choices from ['both', 'OKG_only', "TAXO_only']
     """
     # Load Concept Graph
-    cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
-    cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
-    cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
-    cg_pairs_train = load_cg_pairs(cg_train_path)
-    cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
-    cg_pairs_dev = load_cg_pairs(cg_dev_path)
-    cg_pairs_test = load_cg_pairs(cg_test_path)
-    concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    if mix_mode != 'OKG_only':
+        cg_train_path = '%s/cg_pairs.train.txt' % (dataset_dir)
+        cg_dev_path = '%s/cg_pairs.dev.txt' % (dataset_dir)
+        cg_test_path = '%s/cg_pairs.test.txt' % (dataset_dir)
+        cg_pairs_train = load_cg_pairs(cg_train_path)
+        cg_triples_train = cg_pairs_to_cg_triples(cg_pairs_train)
+        cg_pairs_dev = load_cg_pairs(cg_dev_path)
+        cg_pairs_test = load_cg_pairs(cg_test_path)
+        concept_vocab = get_concept_vocab(cg_pairs_train, cg_pairs_dev, cg_pairs_test)
+    else:
+        cg_pairs_train = {}
+        cg_pairs_dev = {}
+        cg_pairs_test = {}
+        cg_triples_train = []
+        concept_vocab = {}
     # Load Open KG
-    oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
-    oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
-    oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
-    oie_triples_train = load_oie_triples(oie_train_path)
-    oie_triples_dev = load_oie_triples(oie_dev_path)
-    oie_triples_test = load_oie_triples(oie_test_path)
+    if mix_mode != 'TAXO_only':
+        oie_train_path = '%s/oie_triples.train.txt' % (dataset_dir)
+        oie_dev_path = '%s/oie_triples.dev.txt' % (dataset_dir)
+        oie_test_path = '%s/oie_triples.test.txt' % (dataset_dir)
+        oie_triples_train = load_oie_triples(oie_train_path)
+        oie_triples_dev = load_oie_triples(oie_dev_path)
+        oie_triples_test = load_oie_triples(oie_test_path)
+    else:
+        oie_triples_train = []
+        oie_triples_dev = []
+        oie_triples_test = []
     tok_vocab = get_tok_vocab(cg_triples_train, oie_triples_train)
     # resources
     all_phrase2id = get_vocab_for_all_phrase(cg_pairs_train, oie_triples_train,
