@@ -1,14 +1,16 @@
-# Open-World Taxonomy and Knowledge Graph Co-Learning
+# Open-World Taxonomy and Knowledge Graph Co-Learning (AKBC'22)
 
-Code for the manuscript submission "Open-World Taxonomy and Knowledge Graph Co-Learning".
+Data and code of AKBC'22 paper "Open-World Taxonomy and Knowledge Graph Co-Learning". 
+For any suggestion/question, please feel free to create an issue or drop an email @ ([jiaying.lu@emory.edu and j.carlyang@emory.edu](mailto:jiaying.lu@emory.edu,j.carlyang@emory.edu)).
 
+**Table of Contents**
 - [Datasets](#datasets)
 - [Prerequisites](#prerequisites)
 - [Reproduce Results](#reproduce-results)
 
 ## Datasets
-The six datasets used in paper can be downloaded from https://figshare.com/s/ca54dd1ca5f08a203017.  
-After downloading it and decompressing it under `./data/` directory, it looks like:
+The six datasets used in paper can be downloaded from https://figshare.com/articles/dataset/Taxo-KG-Bench/16415727.  
+After downloading and decompressing them under `./data/` directory, the directory looks like:
 ```
 📁 ./data/CGC-OLP-BENCH
 |-- 📁 MSCG-OPIEC
@@ -54,7 +56,7 @@ conda activate taxoKG
 
 ## Reproduce Results
 
-The porposed HAKEGCN model checkpoints can be downloaded from https://figshare.com/s/96647c8dc7f9e73988cc.  
+The porposed HAKEGCN model checkpoints can be downloaded from https://figshare.com/articles/software/HakeGCN_Checkpoints/17108342.  
 Please decompress them under `./checkpoints` folder.
 
 Examples of getting the reported numbers for the main experiments (Table 1, 2, 3): 
@@ -69,4 +71,17 @@ You don't need to change anything to run it.
 #SBATCH --job-name=Reproduce-TaxoKG 
 #SBATCH --gres=gpu:1 
 #SBATCH --output=logs/slurm_reproduce_HAKEGCN 
+```
+
+## Citing Our Work
+If you use our data or code in a scientific publication, please cite the following paper:
+```bibtex
+@inproceedings{lu22:hakeGCN,
+  author     = {Jiaying Lu and
+                Carl Yang},
+  title      = {Open-World Taxonomy and Knowledge Graph Co-Learning},
+  year       = {2022},
+  Booktitle  = {4th Conference on Automated Knowledge Base Construction},
+  Series = {AKBC 2022},
+}
 ```
