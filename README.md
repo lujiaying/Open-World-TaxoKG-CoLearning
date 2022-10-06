@@ -1,6 +1,6 @@
 # Open-World Taxonomy and Knowledge Graph Co-Learning (AKBC'22)
 
-Data and code of AKBC'22 paper "Open-World Taxonomy and Knowledge Graph Co-Learning". 
+Data and code of [AKBC'22](https://www.akbc.ws/2022/) paper "[Open-World Taxonomy and Knowledge Graph Co-Learning](https://www.akbc.ws/2022/papers/11_open_world_taxonomy_and_knowle)". 
 For any suggestion/question, please feel free to create an issue or drop an email @ ([jiaying.lu@emory.edu and j.carlyang@emory.edu](mailto:jiaying.lu@emory.edu,j.carlyang@emory.edu)).
 
 **Table of Contents**
